@@ -42,11 +42,38 @@
     pointer-events: none;
     overflow: visible;
   }
-  #bif-col {
+  #cobweb-col, #bif-col {
     display: flex;
     flex-direction: column;
     gap: 0;
   }
+  #cobweb-options {
+    width: 450px;
+    margin-top: 1px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px 10px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-top: none;
+  }
+  .opt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #8b949e;
+    font-size: 0.75rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .opt-row input[type=checkbox] {
+    accent-color: #388bfd;
+    width: 13px; height: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .opt-row:hover { color: #e6edf3; }
   /* ── Range slider ── */
   #range-slider {
     position: relative;
@@ -168,7 +195,19 @@
 <body>
 <h1>Feigenbaum Explorer</h1>
 <div id="charts">
-  <canvas id="cobweb-canvas" width="450" height="420"></canvas>
+  <div id="cobweb-col">
+    <canvas id="cobweb-canvas" width="450" height="420"></canvas>
+    <div id="cobweb-options">
+      <label class="opt-row">
+        <input type="checkbox" id="chk-discard" checked>
+        discard initial iterations
+      </label>
+      <label class="opt-row">
+        <input type="checkbox" id="chk-random" checked>
+        random starting value of x
+      </label>
+    </div>
+  </div>
   <canvas id="guide-canvas" width="24" height="420"></canvas>
   <div id="bif-col">
     <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
@@ -422,6 +461,63 @@ document.addEventListener('mouseup',  () => { if (bifDragging) { bifDragging = f
 document.addEventListener('touchend', () => { if (bifDragging) { bifDragging = false; setR(currentR); } });
 
 // ─── Draw cobweb ──────────────────────────────────────────────────────────────
+function drawCobwebPath(r, startX, orbit) {
+  // Draw transient (warm-up) path if discardWarmup=false, dimmer style
+  if (!discardWarmup) {
+    cCtx.save();
+    cCtx.lineWidth = 0.8;
+    cCtx.strokeStyle = 'rgba(126, 232, 250, 0.18)';
+    cCtx.setLineDash([2, 3]);
+    let x = startX;
+    // First segment from x-axis: (x0, 0) → (x0, f(x0))
+    const fx0 = logistic(r, x);
+    cCtx.beginPath();
+    cCtx.moveTo(toCanvasX(cobweb, x), toCanvasY(cobweb, 0));
+    cCtx.lineTo(toCanvasX(cobweb, x), toCanvasY(cobweb, fx0));
+    cCtx.lineTo(toCanvasX(cobweb, fx0), toCanvasY(cobweb, fx0));
+    cCtx.stroke();
+    x = fx0;
+    for (let j = 1; j < WARM_UP; j++) {
+      const fx = logistic(r, x);
+      const x0c = toCanvasX(cobweb, x), x2c = toCanvasX(cobweb, fx), y1c = toCanvasY(cobweb, fx);
+      cCtx.beginPath(); cCtx.moveTo(x0c, toCanvasY(cobweb, x)); cCtx.lineTo(x0c, y1c); cCtx.stroke();
+      cCtx.beginPath(); cCtx.moveTo(x0c, y1c); cCtx.lineTo(x2c, y1c); cCtx.stroke();
+      x = fx;
+    }
+    cCtx.setLineDash([]);
+    cCtx.restore();
+    // Main path continues from where warm-up left off (x is now the settled value)
+    // Fall through to main path drawing below with this x
+    drawCobwebMain(r, x, orbit);
+  } else {
+    // Discard: warm up silently then draw main path
+    let x = startX;
+    for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
+    drawCobwebMain(r, x, orbit);
+  }
+}
+
+function drawCobwebMain(r, x, orbit) {
+  const COBWEB_ITER = 20000;
+  cCtx.save();
+  cCtx.lineWidth = 1.0;
+  cCtx.strokeStyle = orbit.length > 0
+    ? 'rgba(126, 232, 250, 0.55)'
+    : 'rgba(126, 232, 250, 0.035)';
+  const seenKeys = new Set();
+  for (let j = 0; j < COBWEB_ITER; j++) {
+    const fx = logistic(r, x);
+    const x0c = toCanvasX(cobweb, x), x2c = toCanvasX(cobweb, fx), y1c = toCanvasY(cobweb, fx);
+    cCtx.beginPath(); cCtx.moveTo(x0c, toCanvasY(cobweb, x)); cCtx.lineTo(x0c, y1c); cCtx.stroke();
+    cCtx.beginPath(); cCtx.moveTo(x0c, y1c); cCtx.lineTo(x2c, y1c); cCtx.stroke();
+    const key = Math.round(fx * 1e8);
+    if (seenKeys.has(key)) break;
+    seenKeys.add(key);
+    x = fx;
+  }
+  cCtx.restore();
+}
+
 function drawCobweb(r, orbit) {
   cCtx.clearRect(0, 0, COBWEB_W, COBWEB_H);
 
@@ -435,6 +531,7 @@ function drawCobweb(r, orbit) {
   const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
   drawAxes(cCtx, cobweb, 'x', 'f(x)', xTicks, yTicks, COBWEB_W, COBWEB_H);
 
+  // Parabola
   cCtx.save();
   cCtx.strokeStyle = '#f78166';
   cCtx.lineWidth = 1.8;
@@ -446,6 +543,7 @@ function drawCobweb(r, orbit) {
   }
   cCtx.stroke();
 
+  // Diagonal
   cCtx.strokeStyle = '#3fb950';
   cCtx.lineWidth = 1.2;
   cCtx.setLineDash([5, 4]);
@@ -456,33 +554,11 @@ function drawCobweb(r, orbit) {
   cCtx.setLineDash([]);
   cCtx.restore();
 
-  const COBWEB_ITER = 20000;
-  let x = 0.2;
-  for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
+  // Cobweb path
+  const startX = randomX0 ? 0.2 : x0;
+  drawCobwebPath(r, startX, orbit);
 
-  cCtx.save();
-  cCtx.lineWidth = 1.0;
-  cCtx.strokeStyle = orbit.length > 0
-    ? 'rgba(126, 232, 250, 0.55)'
-    : 'rgba(126, 232, 250, 0.035)';
-
-  const seenKeys = new Set();
-  for (let j = 0; j < COBWEB_ITER; j++) {
-    const fx = logistic(r, x);
-    const x0c = toCanvasX(cobweb, x);
-    const x2c = toCanvasX(cobweb, fx);
-    const y1c = toCanvasY(cobweb, fx);
-
-    cCtx.beginPath(); cCtx.moveTo(x0c, toCanvasY(cobweb, x)); cCtx.lineTo(x0c, y1c); cCtx.stroke();
-    cCtx.beginPath(); cCtx.moveTo(x0c, y1c); cCtx.lineTo(x2c, y1c); cCtx.stroke();
-
-    const key = Math.round(fx * 1e8);
-    if (seenKeys.has(key)) break;
-    seenKeys.add(key);
-    x = fx;
-  }
-  cCtx.restore();
-
+  // Attractor dots
   if (orbit.length > 0) {
     cCtx.save();
     for (const pt of orbit) {
@@ -492,6 +568,37 @@ function drawCobweb(r, orbit) {
       cCtx.fillStyle = '#2dd4bf'; cCtx.fill();
       cCtx.strokeStyle = '#0d1117'; cCtx.lineWidth = 1; cCtx.stroke();
     }
+    cCtx.restore();
+  }
+
+  // x0 marker on x-axis when not using random start
+  if (!randomX0) {
+    const mx = toCanvasX(cobweb, x0);
+    const my = cobweb.y1; // bottom of plot area
+    cCtx.save();
+    // Vertical dashed line from x-axis up
+    cCtx.strokeStyle = 'rgba(251,188,5,0.4)';
+    cCtx.lineWidth = 1;
+    cCtx.setLineDash([3, 3]);
+    cCtx.beginPath(); cCtx.moveTo(mx, my); cCtx.lineTo(mx, cobweb.y0); cCtx.stroke();
+    cCtx.setLineDash([]);
+    // Diamond marker on the axis
+    cCtx.fillStyle = '#fbbf24';
+    cCtx.strokeStyle = '#0d1117';
+    cCtx.lineWidth = 1;
+    cCtx.beginPath();
+    cCtx.moveTo(mx, my - 8);
+    cCtx.lineTo(mx + 6, my);
+    cCtx.lineTo(mx, my + 8);
+    cCtx.lineTo(mx - 6, my);
+    cCtx.closePath();
+    cCtx.fill(); cCtx.stroke();
+    // x0 value label
+    cCtx.fillStyle = '#fbbf24';
+    cCtx.font = '10px Courier New';
+    cCtx.textAlign = mx > cobweb.x1 - 40 ? 'right' : 'left';
+    cCtx.textBaseline = 'top';
+    cCtx.fillText(`x₀=${x0.toFixed(3)}`, mx + (mx > cobweb.x1 - 40 ? -8 : 8), my + 2);
     cCtx.restore();
   }
 }
@@ -520,9 +627,12 @@ function drawGuides(orbitPts, r) {
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let currentR  = 3.5;
-let rViewMin  = 2.5;
-let rViewMax  = 4.0;
+let currentR      = 3.5;
+let rViewMin      = 2.5;
+let rViewMax      = 4.0;
+let discardWarmup = true;
+let randomX0      = true;
+let x0            = 0.2;
 
 function clampR(r) {
   return Math.max(bif.xMin, Math.min(bif.xMax, r));
@@ -530,9 +640,12 @@ function clampR(r) {
 
 function pushURL() {
   const p = new URLSearchParams();
-  p.set('r',    currentR.toFixed(7));
-  p.set('rMin', rViewMin.toFixed(4));
-  p.set('rMax', rViewMax.toFixed(4));
+  p.set('r',       currentR.toFixed(7));
+  p.set('rMin',    rViewMin.toFixed(4));
+  p.set('rMax',    rViewMax.toFixed(4));
+  p.set('discard', discardWarmup ? '1' : '0');
+  p.set('random',  randomX0      ? '1' : '0');
+  if (!randomX0) p.set('x0', x0.toFixed(5));
   history.replaceState(null, '', '?' + p.toString());
 }
 
@@ -571,6 +684,73 @@ function setRange(newMin, newMax) {
   // Clamp currentR to new range and redraw
   setR(currentR);
 }
+
+// ─── Checkbox options ─────────────────────────────────────────────────────────
+const chkDiscard = document.getElementById('chk-discard');
+const chkRandom  = document.getElementById('chk-random');
+
+chkDiscard.addEventListener('change', () => {
+  discardWarmup = chkDiscard.checked;
+  setR(currentR);
+});
+chkRandom.addEventListener('change', () => {
+  randomX0 = chkRandom.checked;
+  setR(currentR);
+});
+
+// ─── x0 drag on cobweb canvas x-axis ─────────────────────────────────────────
+const X0_HIT = 12; // px hit radius around diamond marker
+let x0Dragging = false;
+
+function x0FromClientX(clientX) {
+  const rect = cobwebCanvas.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const pct = Math.max(0, Math.min(1, (px - cobweb.x0) / (cobweb.x1 - cobweb.x0)));
+  return Math.round(pct * 1e5) / 1e5;
+}
+
+function nearX0Marker(clientX, clientY) {
+  if (randomX0) return false;
+  const rect = cobwebCanvas.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+  const mx = toCanvasX(cobweb, x0);
+  const my = cobweb.y1;
+  return Math.abs(px - mx) <= X0_HIT && Math.abs(py - my) <= X0_HIT;
+}
+
+cobwebCanvas.addEventListener('mousedown', e => {
+  if (nearX0Marker(e.clientX, e.clientY)) {
+    x0Dragging = true; e.preventDefault();
+  }
+});
+cobwebCanvas.addEventListener('touchstart', e => {
+  if (nearX0Marker(e.touches[0].clientX, e.touches[0].clientY)) {
+    x0Dragging = true; e.preventDefault();
+  }
+}, { passive: false });
+cobwebCanvas.addEventListener('mousemove', e => {
+  if (x0Dragging) {
+    x0 = x0FromClientX(e.clientX);
+    setR(currentR);
+  } else if (!randomX0) {
+    const rect = cobwebCanvas.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    const mx = toCanvasX(cobweb, x0), my = cobweb.y1;
+    cobwebCanvas.style.cursor = (Math.abs(px - mx) <= X0_HIT && Math.abs(py - my) <= X0_HIT)
+      ? 'ew-resize' : 'default';
+  } else {
+    cobwebCanvas.style.cursor = 'default';
+  }
+});
+document.addEventListener('mousemove', e => {
+  if (x0Dragging) { x0 = x0FromClientX(e.clientX); setR(currentR); }
+});
+document.addEventListener('touchmove', e => {
+  if (x0Dragging) { x0 = x0FromClientX(e.touches[0].clientX); setR(currentR); }
+}, { passive: false });
+document.addEventListener('mouseup',  () => { x0Dragging = false; });
+document.addEventListener('touchend', () => { x0Dragging = false; });
 
 // ─── Range slider ─────────────────────────────────────────────────────────────
 const rsContainer = document.getElementById('range-slider');
@@ -673,14 +853,23 @@ function buildButtons() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 buildButtons();
-const _params = new URLSearchParams(location.search);
+const _params   = new URLSearchParams(location.search);
 const _initRMin = parseFloat(_params.get('rMin'));
 const _initRMax = parseFloat(_params.get('rMax'));
 const _initR    = parseFloat(_params.get('r'));
+const _initX0   = parseFloat(_params.get('x0'));
+
 rViewMin = (isFinite(_initRMin) && _initRMin >= SLIDER_MIN) ? _initRMin : 2.5;
 rViewMax = (isFinite(_initRMax) && _initRMax <= SLIDER_MAX && _initRMax > rViewMin) ? _initRMax : 4.0;
 bif.xMin = rViewMin;
 bif.xMax = rViewMax;
+
+if (_params.has('discard')) discardWarmup = _params.get('discard') !== '0';
+if (_params.has('random'))  randomX0      = _params.get('random')  !== '0';
+if (isFinite(_initX0) && _initX0 >= 0 && _initX0 <= 1) x0 = _initX0;
+
+chkDiscard.checked = discardWarmup;
+chkRandom.checked  = randomX0;
 
 buildBifurcation(); // also calls buildBifBg()
 updateRangeSliderUI();
