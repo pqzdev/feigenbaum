@@ -104,7 +104,18 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  #btn-reset-zoom:hover { border-color: #58a6ff; color: #7ee8fa; background: #30363d; }
+  #btn-reset-zoom:hover, #btn-zoom-in:hover, #btn-zoom-out:hover { border-color: #58a6ff; color: #7ee8fa; background: #30363d; }
+  #btn-zoom-in, #btn-zoom-out {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
   /* Box-select overlay */
   #bif-wrapper {
     position: relative;
@@ -263,6 +274,8 @@
         <input type="checkbox" id="chk-log"> log₁₀ scale
       </label>
       <span id="bif-computing" style="display:none;color:#484f58;font-size:0.68rem;margin-left:6px;">computing…</span>
+      <button id="btn-zoom-in"  title="Zoom in">🔍+</button>
+      <button id="btn-zoom-out" title="Zoom out">🔍−</button>
       <button id="btn-reset-zoom">Reset zoom</button>
     </div>
     <div id="range-slider">
@@ -982,6 +995,16 @@ chkLog.addEventListener('change', () => {
 document.getElementById('btn-reset-zoom').addEventListener('click', () => {
   setZoom(DATA_MIN, DATA_MAX, 0, 1);
 });
+
+function zoomFromCentre(factor) {
+  const rC = (bif.xMin + bif.xMax) / 2;
+  const xC = (bif.yMin + bif.yMax) / 2;
+  const rSpan = (bif.xMax - bif.xMin) * factor / 2;
+  const xSpan = (bif.yMax - bif.yMin) * factor / 2;
+  setZoom(rC - rSpan, rC + rSpan, xC - xSpan, xC + xSpan);
+}
+document.getElementById('btn-zoom-in') .addEventListener('click', () => zoomFromCentre(1 / 2));
+document.getElementById('btn-zoom-out').addEventListener('click', () => zoomFromCentre(2));
 
 // ─── x0 drag on cobweb canvas x-axis ─────────────────────────────────────────
 const X0_HIT = 12;
