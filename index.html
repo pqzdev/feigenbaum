@@ -42,6 +42,63 @@
     pointer-events: none;
     overflow: visible;
   }
+  #bif-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  /* ── Range slider ── */
+  #range-slider {
+    position: relative;
+    width: 450px;
+    height: 36px;
+    cursor: default;
+    user-select: none;
+    margin-top: 1px;
+  }
+  #rs-track {
+    position: absolute;
+    top: 50%; left: 0; right: 0;
+    height: 4px;
+    background: #30363d;
+    transform: translateY(-50%);
+    border-radius: 2px;
+  }
+  #rs-fill {
+    position: absolute;
+    top: 0; height: 100%;
+    background: #388bfd44;
+    pointer-events: none;
+  }
+  .rs-thumb {
+    position: absolute;
+    top: 50%;
+    width: 14px; height: 14px;
+    background: #388bfd;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 6px rgba(56,139,253,0.5);
+    cursor: ew-resize;
+    transition: box-shadow 0.1s;
+    z-index: 2;
+  }
+  .rs-thumb:hover, .rs-thumb.dragging {
+    background: #7ee8fa;
+    box-shadow: 0 0 12px rgba(126,232,250,0.7);
+  }
+  #rs-labels {
+    position: absolute;
+    bottom: -2px; left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  #rs-label-min, #rs-label-max {
+    font-size: 0.7rem;
+    color: #8b949e;
+    font-family: 'Courier New', monospace;
+  }
+  /* ── Controls ── */
   #controls {
     margin-top: 16px;
     display: flex;
@@ -91,15 +148,12 @@
   }
   button:hover { background: #30363d; border-color: #58a6ff; color: #7ee8fa; }
   button:active { background: #388bfd22; }
-  #range-info {
-    color: #8b949e;
-    font-size: 0.75rem;
-  }
+  #range-info { color: #8b949e; font-size: 0.75rem; }
   #wiki-links {
     display: flex;
     gap: 32px;
     margin-top: 8px;
-    width: 900px;
+    width: 924px;
     justify-content: space-around;
   }
   #wiki-links a {
@@ -116,7 +170,18 @@
 <div id="charts">
   <canvas id="cobweb-canvas" width="450" height="420"></canvas>
   <canvas id="guide-canvas" width="24" height="420"></canvas>
-  <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+  <div id="bif-col">
+    <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+    <div id="range-slider">
+      <div id="rs-track"><div id="rs-fill"></div></div>
+      <div id="thumb-min" class="rs-thumb"></div>
+      <div id="thumb-max" class="rs-thumb"></div>
+      <div id="rs-labels">
+        <span id="rs-label-min">0.0</span>
+        <span id="rs-label-max">4.0</span>
+      </div>
+    </div>
+  </div>
   <svg id="guide-svg" width="924" height="420"></svg>
 </div>
 <div id="wiki-links">
@@ -133,38 +198,36 @@
 
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
-const R_MIN = 2.5, R_MAX = 4.0;
+const DATA_MIN = 0, DATA_MAX = 4.0;   // full data range (always computed)
+const SLIDER_MIN = 0, SLIDER_MAX = 4.0; // slider absolute limits
 const WARM_UP = 500, CAPTURE = 300;
-const BIF_STEPS = 1200; // r resolution for bifurcation diagram
+const BIF_STEPS = 2400; // higher res since we cover full 0-4 range
 
 // ─── Shared layout ────────────────────────────────────────────────────────────
-// Both canvases: left margin for y-axis, right margin, top/bottom padding
 const PAD = { top: 36, bottom: 44, left: 52, right: 16 };
 const COBWEB_W = 450, COBWEB_H = 420;
 const BIF_W = 450, BIF_H = 420;
 
-// Plot regions
+// Plot regions — bif.xMin/xMax are mutable (driven by view range)
 const cobweb = {
   x0: PAD.left, x1: COBWEB_W - PAD.right,
   y0: PAD.top,  y1: COBWEB_H - PAD.bottom,
-  // domain/range both 0..1
   xMin: 0, xMax: 1,
   yMin: 0, yMax: 1,
 };
 const bif = {
   x0: PAD.left, x1: BIF_W - PAD.right,
   y0: PAD.top,  y1: BIF_H - PAD.bottom,
-  xMin: R_MIN, xMax: R_MAX,
-  yMin: 0,     yMax: 1,
+  xMin: 2.5, xMax: 4.0,   // updated by setRange()
+  yMin: 0,   yMax: 1,
 };
 
 // ─── Canvas setup ─────────────────────────────────────────────────────────────
 const cobwebCanvas = document.getElementById('cobweb-canvas');
 const bifCanvas    = document.getElementById('bifurcation-canvas');
-const ctxC = cobwebCanvas.getContext('2d');
-const ctxB = bifCanvas.getContext('2d');
+const guideCanvas  = document.getElementById('guide-canvas');
+const GUIDE_W = 24;
 
-// DPR scaling for sharp rendering
 function setupCanvas(canvas, w, h) {
   const dpr = window.devicePixelRatio || 1;
   canvas.width  = w * dpr;
@@ -175,8 +238,6 @@ function setupCanvas(canvas, w, h) {
   ctx.scale(dpr, dpr);
   return ctx;
 }
-const guideCanvas  = document.getElementById('guide-canvas');
-const GUIDE_W = 24;
 const cCtx = setupCanvas(cobwebCanvas, COBWEB_W, COBWEB_H);
 const bCtx = setupCanvas(bifCanvas,    BIF_W,    BIF_H);
 const gCtx = setupCanvas(guideCanvas,  GUIDE_W,  COBWEB_H);
@@ -186,7 +247,6 @@ function toCanvasX(region, v) {
   return region.x0 + (v - region.xMin) / (region.xMax - region.xMin) * (region.x1 - region.x0);
 }
 function toCanvasY(region, v) {
-  // y=0 at bottom
   return region.y1 - (v - region.yMin) / (region.yMax - region.yMin) * (region.y1 - region.y0);
 }
 
@@ -198,38 +258,26 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
   ctx.fillStyle = '#8b949e';
   ctx.font = '11px Courier New';
 
-  // Border
   ctx.strokeRect(region.x0, region.y0, region.x1 - region.x0, region.y1 - region.y0);
 
-  // Grid + x ticks
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   for (const t of xTicks) {
     const cx = toCanvasX(region, t);
-    ctx.beginPath();
-    ctx.moveTo(cx, region.y0);
-    ctx.lineTo(cx, region.y1);
-    ctx.strokeStyle = '#21262d';
-    ctx.stroke();
-    ctx.strokeStyle = '#30363d';
-    ctx.fillText(t.toFixed(1), cx, region.y1 + 4);
+    ctx.beginPath(); ctx.moveTo(cx, region.y0); ctx.lineTo(cx, region.y1);
+    ctx.strokeStyle = '#21262d'; ctx.stroke(); ctx.strokeStyle = '#30363d';
+    ctx.fillText(t.toFixed(2), cx, region.y1 + 4);
   }
 
-  // Grid + y ticks
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   for (const t of yTicks) {
     const cy = toCanvasY(region, t);
-    ctx.beginPath();
-    ctx.moveTo(region.x0, cy);
-    ctx.lineTo(region.x1, cy);
-    ctx.strokeStyle = '#21262d';
-    ctx.stroke();
-    ctx.strokeStyle = '#30363d';
+    ctx.beginPath(); ctx.moveTo(region.x0, cy); ctx.lineTo(region.x1, cy);
+    ctx.strokeStyle = '#21262d'; ctx.stroke(); ctx.strokeStyle = '#30363d';
     ctx.fillText(t.toFixed(1), region.x0 - 4, cy);
   }
 
-  // Axis labels
   ctx.fillStyle = '#8b949e';
   ctx.font = '12px Courier New';
   ctx.textAlign = 'center';
@@ -249,14 +297,14 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
 // ─── Logistic map ─────────────────────────────────────────────────────────────
 function logistic(r, x) { return r * x * (1 - x); }
 
-// ─── Bifurcation data ─────────────────────────────────────────────────────────
-let bifPoints = []; // [{r, x}]
+// ─── Bifurcation data (full 0–4 range, computed once) ─────────────────────────
+let bifPoints = [];
 
 function buildBifurcation() {
   bifPoints = [];
-  const rStep = (R_MAX - R_MIN) / BIF_STEPS;
+  const rStep = (DATA_MAX - DATA_MIN) / BIF_STEPS;
   for (let i = 0; i <= BIF_STEPS; i++) {
-    const r = R_MIN + i * rStep;
+    const r = DATA_MIN + i * rStep;
     let x = 0.5;
     for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
     const seen = new Set();
@@ -271,11 +319,10 @@ function buildBifurcation() {
   buildBifBg();
 }
 
-// ─── Draw bifurcation ─────────────────────────────────────────────────────────
-let bifBgImage = null; // cached background (axes + points, no line)
+// ─── Draw bifurcation background (re-built on range change) ───────────────────
+let bifBgImage = null;
 
 function buildBifBg() {
-  // Draw into an offscreen canvas, then cache as ImageBitmap
   const off = document.createElement('canvas');
   const dpr = window.devicePixelRatio || 1;
   off.width  = BIF_W * dpr;
@@ -286,37 +333,41 @@ function buildBifBg() {
   ctx.fillStyle = '#161b22';
   ctx.fillRect(0, 0, BIF_W, BIF_H);
 
-  // Title
   ctx.fillStyle = '#8b949e';
   ctx.font = '13px Courier New';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('Bifurcation Diagram', (bif.x0 + bif.x1) / 2, 6);
 
-  // Axes
+  // Dynamic x-ticks: pick ~5 nice ticks within current view range
+  const span = bif.xMax - bif.xMin;
+  const step = span <= 0.2 ? 0.02 : span <= 0.5 ? 0.05 : span <= 1 ? 0.1 : span <= 2 ? 0.2 : 0.5;
   const xTicks = [];
-  for (let r = Math.ceil(R_MIN * 10) / 10; r <= R_MAX + 1e-9; r = Math.round((r + 0.5) * 10) / 10) {
-    if (r >= R_MIN && r <= R_MAX) xTicks.push(r);
+  const t0 = Math.ceil(bif.xMin / step) * step;
+  for (let t = t0; t <= bif.xMax + 1e-9; t = Math.round((t + step) * 1e9) / 1e9) {
+    xTicks.push(t);
   }
   const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
   drawAxes(ctx, bif, 'r', 'x', xTicks, yTicks, BIF_W, BIF_H);
 
-  // Points
+  // Plot only points within view range
   ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
   for (const { r, x } of bifPoints) {
+    if (r < bif.xMin || r > bif.xMax) continue;
     const cx = toCanvasX(bif, r);
     const cy = toCanvasY(bif, x);
-    ctx.fillRect(cx, cy, 1.2, 1.2);
+    ctx.fillRect(cx, cy, 1.5, 1.5);
   }
 
   bifBgImage = off;
 }
 
 function drawBifurcation(currentR, orbit) {
-  // Blit cached background
   bCtx.drawImage(bifBgImage, 0, 0, BIF_W, BIF_H);
 
-  // Vertical line at current r
+  // Only draw r-line if currentR is within view
+  if (currentR < bif.xMin || currentR > bif.xMax) return;
+
   const rx = toCanvasX(bif, currentR);
   bCtx.save();
   bCtx.strokeStyle = bifDragging ? '#7ee8fa' : '#388bfd';
@@ -328,7 +379,6 @@ function drawBifurcation(currentR, orbit) {
   bCtx.stroke();
   bCtx.setLineDash([]);
 
-  // Drag handle — small circle at top of line
   bCtx.fillStyle = bifDragging ? '#7ee8fa' : '#388bfd';
   bCtx.beginPath();
   bCtx.arc(rx, bif.y0 + 8, 5, 0, Math.PI * 2);
@@ -338,13 +388,13 @@ function drawBifurcation(currentR, orbit) {
 
 // ─── Bifurcation canvas drag ───────────────────────────────────────────────────
 let bifDragging = false;
-const BIF_HIT = 12; // px hit zone either side of line
+const BIF_HIT = 12;
 
 function bifCanvasR(clientX) {
   const rect = bifCanvas.getBoundingClientRect();
   const x = clientX - rect.left;
   const pct = Math.max(0, Math.min(1, (x - bif.x0) / (bif.x1 - bif.x0)));
-  return R_MIN + pct * (R_MAX - R_MIN);
+  return bif.xMin + pct * (bif.xMax - bif.xMin);
 }
 
 function nearLine(clientX) {
@@ -355,24 +405,15 @@ function nearLine(clientX) {
 }
 
 bifCanvas.addEventListener('mousedown', e => {
-  if (nearLine(e.clientX)) {
-    bifDragging = true;
-    setR(bifCanvasR(e.clientX));
-    e.preventDefault();
-  }
+  if (nearLine(e.clientX)) { bifDragging = true; setR(bifCanvasR(e.clientX)); e.preventDefault(); }
 });
 bifCanvas.addEventListener('touchstart', e => {
-  if (nearLine(e.touches[0].clientX)) {
-    bifDragging = true;
-    setR(bifCanvasR(e.touches[0].clientX));
-    e.preventDefault();
-  }
+  if (nearLine(e.touches[0].clientX)) { bifDragging = true; setR(bifCanvasR(e.touches[0].clientX)); e.preventDefault(); }
 }, { passive: false });
 bifCanvas.addEventListener('mousemove', e => {
   const rect = bifCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
-  const lineX = toCanvasX(bif, currentR);
-  bifCanvas.style.cursor = (Math.abs(x - lineX) <= BIF_HIT) ? 'ew-resize' : 'default';
+  bifCanvas.style.cursor = (Math.abs(x - toCanvasX(bif, currentR)) <= BIF_HIT) ? 'ew-resize' : 'default';
   if (bifDragging) setR(bifCanvasR(e.clientX));
 });
 document.addEventListener('mousemove', e => { if (bifDragging) setR(bifCanvasR(e.clientX)); });
@@ -384,34 +425,27 @@ document.addEventListener('touchend', () => { if (bifDragging) { bifDragging = f
 function drawCobweb(r, orbit) {
   cCtx.clearRect(0, 0, COBWEB_W, COBWEB_H);
 
-  // Title
   cCtx.fillStyle = '#8b949e';
   cCtx.font = '13px Courier New';
   cCtx.textAlign = 'center';
   cCtx.textBaseline = 'top';
   cCtx.fillText(`Cobweb  (r = ${r.toFixed(7)})`, (cobweb.x0 + cobweb.x1) / 2, 6);
 
-  // Axes — same y ticks as bifurcation for alignment
   const xTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
   const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
   drawAxes(cCtx, cobweb, 'x', 'f(x)', xTicks, yTicks, COBWEB_W, COBWEB_H);
 
-  // Parabola: f(x) = r*x*(1-x)
   cCtx.save();
   cCtx.strokeStyle = '#f78166';
   cCtx.lineWidth = 1.8;
   cCtx.beginPath();
-  const steps = 400;
-  for (let i = 0; i <= steps; i++) {
-    const x = i / steps;
-    const y = logistic(r, x);
-    const cx = toCanvasX(cobweb, x);
-    const cy = toCanvasY(cobweb, y);
-    i === 0 ? cCtx.moveTo(cx, cy) : cCtx.lineTo(cx, cy);
+  for (let i = 0; i <= 400; i++) {
+    const x = i / 400, y = logistic(r, x);
+    i === 0 ? cCtx.moveTo(toCanvasX(cobweb, x), toCanvasY(cobweb, y))
+            : cCtx.lineTo(toCanvasX(cobweb, x), toCanvasY(cobweb, y));
   }
   cCtx.stroke();
 
-  // y = x diagonal
   cCtx.strokeStyle = '#3fb950';
   cCtx.lineWidth = 1.2;
   cCtx.setLineDash([5, 4]);
@@ -422,93 +456,84 @@ function drawCobweb(r, orbit) {
   cCtx.setLineDash([]);
   cCtx.restore();
 
-  // Cobweb path — draw each segment individually at low alpha so
-  // density accumulates: periodic orbits glow, chaos stays dim.
-  const COBWEB_ITER = 2000;
+  const COBWEB_ITER = 20000;
   let x = 0.2;
   for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
 
   cCtx.save();
   cCtx.lineWidth = 1.0;
-  cCtx.strokeStyle = 'rgba(126, 232, 250, 0.08)';
+  cCtx.strokeStyle = orbit.length > 0
+    ? 'rgba(126, 232, 250, 0.55)'
+    : 'rgba(126, 232, 250, 0.035)';
 
+  const seenKeys = new Set();
   for (let j = 0; j < COBWEB_ITER; j++) {
     const fx = logistic(r, x);
     const x0c = toCanvasX(cobweb, x);
-    const x1c = toCanvasX(cobweb, x);   // vertical: x stays same
-    const x2c = toCanvasX(cobweb, fx);  // horizontal: moves to fx
-    const y0c = toCanvasY(cobweb, x);   // start on diagonal
-    const y1c = toCanvasY(cobweb, fx);  // up/down to parabola
-    const y2c = toCanvasY(cobweb, fx);  // horizontal stays at fx
+    const x2c = toCanvasX(cobweb, fx);
+    const y1c = toCanvasY(cobweb, fx);
 
-    // vertical segment
-    cCtx.beginPath();
-    cCtx.moveTo(x0c, y0c);
-    cCtx.lineTo(x1c, y1c);
-    cCtx.stroke();
-    // horizontal segment
-    cCtx.beginPath();
-    cCtx.moveTo(x1c, y1c);
-    cCtx.lineTo(x2c, y2c);
-    cCtx.stroke();
+    cCtx.beginPath(); cCtx.moveTo(x0c, toCanvasY(cobweb, x)); cCtx.lineTo(x0c, y1c); cCtx.stroke();
+    cCtx.beginPath(); cCtx.moveTo(x0c, y1c); cCtx.lineTo(x2c, y1c); cCtx.stroke();
 
+    const key = Math.round(fx * 1e8);
+    if (seenKeys.has(key)) break;
+    seenKeys.add(key);
     x = fx;
   }
   cCtx.restore();
 
-  // Attractor dots on the parabola at (pt, f(pt))
   if (orbit.length > 0) {
     cCtx.save();
     for (const pt of orbit) {
       const fx = logistic(r, pt);
-      const px = toCanvasX(cobweb, pt);
-      const py = toCanvasY(cobweb, fx);
       cCtx.beginPath();
-      cCtx.arc(px, py, 4, 0, Math.PI * 2);
-      cCtx.fillStyle = '#2dd4bf';
-      cCtx.fill();
-      cCtx.strokeStyle = '#0d1117';
-      cCtx.lineWidth = 1;
-      cCtx.stroke();
+      cCtx.arc(toCanvasX(cobweb, pt), toCanvasY(cobweb, fx), 4, 0, Math.PI * 2);
+      cCtx.fillStyle = '#2dd4bf'; cCtx.fill();
+      cCtx.strokeStyle = '#0d1117'; cCtx.lineWidth = 1; cCtx.stroke();
     }
     cCtx.restore();
   }
 }
 
-// ─── SVG guide lines (dot on cobweb parabola → r-line on bifurcation) ─────────
+// ─── SVG guide lines ──────────────────────────────────────────────────────────
 const guideSvg = document.getElementById('guide-svg');
-// SVG x-offsets: cobweb is [0, COBWEB_W), guide is [COBWEB_W, COBWEB_W+GUIDE_W), bif starts after
-const BIF_SVG_OFFSET = COBWEB_W + GUIDE_W; // 924 = 450+24+450
+const BIF_SVG_OFFSET = COBWEB_W + GUIDE_W;
 
 function drawGuides(orbitPts, r) {
-  // Clear previous lines
   while (guideSvg.firstChild) guideSvg.removeChild(guideSvg.firstChild);
-  if (orbitPts.length === 0) return;
+  if (orbitPts.length === 0 || r < bif.xMin || r > bif.xMax) return;
 
   const rLineX = BIF_SVG_OFFSET + toCanvasX(bif, r);
-
   for (const pt of orbitPts) {
-    const fx   = logistic(r, pt);
-    const dotX = toCanvasX(cobweb, pt);   // x of dot on parabola (cobweb canvas space)
-    const dotY = toCanvasY(cobweb, fx);   // y of dot (same scale across all canvases)
-
+    const fx = logistic(r, pt);
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', dotX);
-    line.setAttribute('y1', dotY);
+    line.setAttribute('x1', toCanvasX(cobweb, pt));
+    line.setAttribute('y1', toCanvasY(cobweb, fx));
     line.setAttribute('x2', rLineX);
-    line.setAttribute('y2', dotY);
-    line.setAttribute('stroke', 'rgba(45,212,191,0.5)');
-    line.setAttribute('stroke-width', '1');
-    line.setAttribute('stroke-dasharray', '3 4');
+    line.setAttribute('y2', toCanvasY(cobweb, fx));
+    line.setAttribute('stroke', 'rgba(45,212,191,0.2)');
+    line.setAttribute('stroke-width', '0.5');
+    line.setAttribute('stroke-dasharray', '2 5');
     guideSvg.appendChild(line);
   }
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let currentR = 3.5;
+let currentR  = 3.5;
+let rViewMin  = 2.5;
+let rViewMax  = 4.0;
 
 function clampR(r) {
-  return Math.max(R_MIN, Math.min(R_MAX, r));
+  return Math.max(bif.xMin, Math.min(bif.xMax, r));
+}
+
+function pushURL() {
+  const p = new URLSearchParams();
+  p.set('r',    currentR.toFixed(7));
+  p.set('rMin', rViewMin.toFixed(4));
+  p.set('rMax', rViewMax.toFixed(4));
+  history.replaceState(null, '', '?' + p.toString());
 }
 
 function computeOrbit(r) {
@@ -518,8 +543,7 @@ function computeOrbit(r) {
   const orbitMap = new Map();
   for (let j = 0; j < DOT_CAP; j++) {
     ax = logistic(r, ax);
-    const key = Math.round(ax * 1e9);
-    orbitMap.set(key, ax);
+    orbitMap.set(Math.round(ax * 1e9), ax);
   }
   const pts = [...orbitMap.values()];
   return pts.length <= 64 ? pts : [];
@@ -528,12 +552,96 @@ function computeOrbit(r) {
 function setR(r) {
   currentR = clampR(r);
   document.getElementById('r-display').textContent = currentR.toFixed(7);
-  history.replaceState(null, '', '?r=' + currentR.toFixed(7));
+  pushURL();
   const orbit = computeOrbit(currentR);
   drawCobweb(currentR, orbit);
   drawGuides(orbit, currentR);
   drawBifurcation(currentR, orbit);
 }
+
+function setRange(newMin, newMax) {
+  rViewMin = newMin;
+  rViewMax = newMax;
+  bif.xMin = newMin;
+  bif.xMax = newMax;
+  document.getElementById('range-info').textContent =
+    `range: ${newMin.toFixed(2)} – ${newMax.toFixed(2)}`;
+  updateRangeSliderUI();
+  buildBifBg();
+  // Clamp currentR to new range and redraw
+  setR(currentR);
+}
+
+// ─── Range slider ─────────────────────────────────────────────────────────────
+const rsContainer = document.getElementById('range-slider');
+const rsTrack     = document.getElementById('rs-track');
+const rsFill      = document.getElementById('rs-fill');
+const thumbMin    = document.getElementById('thumb-min');
+const thumbMax    = document.getElementById('thumb-max');
+const rsLabelMin  = document.getElementById('rs-label-min');
+const rsLabelMax  = document.getElementById('rs-label-max');
+
+const RS_GAP = 0.05; // minimum gap between handles
+
+function rsToPct(v) {
+  return (v - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN) * 100;
+}
+function pctToR(pct) {
+  return SLIDER_MIN + pct / 100 * (SLIDER_MAX - SLIDER_MIN);
+}
+function rsFromClientX(clientX) {
+  const rect = rsTrack.getBoundingClientRect();
+  return Math.max(0, Math.min(100, (clientX - rect.left) / rect.width * 100));
+}
+
+function updateRangeSliderUI() {
+  const pMin = rsToPct(rViewMin);
+  const pMax = rsToPct(rViewMax);
+  thumbMin.style.left = pMin + '%';
+  thumbMax.style.left = pMax + '%';
+  rsFill.style.left  = pMin + '%';
+  rsFill.style.width = (pMax - pMin) + '%';
+  rsLabelMin.textContent = rViewMin.toFixed(2);
+  rsLabelMax.textContent = rViewMax.toFixed(2);
+}
+
+let rsDragging = null; // 'min' | 'max' | null
+
+function rsMouseDown(which, e) {
+  rsDragging = which;
+  e.preventDefault();
+}
+thumbMin.addEventListener('mousedown',  e => rsMouseDown('min', e));
+thumbMax.addEventListener('mousedown',  e => rsMouseDown('max', e));
+thumbMin.addEventListener('touchstart', e => { rsMouseDown('min', e); }, { passive: false });
+thumbMax.addEventListener('touchstart', e => { rsMouseDown('max', e); }, { passive: false });
+
+document.addEventListener('mousemove', e => {
+  if (!rsDragging) return;
+  const pct = rsFromClientX(e.clientX);
+  let v = Math.round(pctToR(pct) * 1e4) / 1e4;
+  if (rsDragging === 'min') {
+    v = Math.max(SLIDER_MIN, Math.min(rViewMax - RS_GAP, v));
+    if (v !== rViewMin) setRange(v, rViewMax);
+  } else {
+    v = Math.min(SLIDER_MAX, Math.max(rViewMin + RS_GAP, v));
+    if (v !== rViewMax) setRange(rViewMin, v);
+  }
+});
+document.addEventListener('touchmove', e => {
+  if (!rsDragging) return;
+  const pct = rsFromClientX(e.touches[0].clientX);
+  let v = Math.round(pctToR(pct) * 1e4) / 1e4;
+  if (rsDragging === 'min') {
+    v = Math.max(SLIDER_MIN, Math.min(rViewMax - RS_GAP, v));
+    if (v !== rViewMin) setRange(v, rViewMax);
+  } else {
+    v = Math.min(SLIDER_MAX, Math.max(rViewMin + RS_GAP, v));
+    if (v !== rViewMax) setRange(rViewMin, v);
+  }
+}, { passive: false });
+document.addEventListener('mouseup',  () => { rsDragging = null; });
+document.addEventListener('touchend', () => { rsDragging = null; });
 
 // ─── Increment buttons ────────────────────────────────────────────────────────
 const STEPS = [0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001, 0.0000001];
@@ -565,8 +673,19 @@ function buildButtons() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 buildButtons();
-buildBifurcation();
-const _initR = parseFloat(new URLSearchParams(location.search).get('r'));
+const _params = new URLSearchParams(location.search);
+const _initRMin = parseFloat(_params.get('rMin'));
+const _initRMax = parseFloat(_params.get('rMax'));
+const _initR    = parseFloat(_params.get('r'));
+rViewMin = (isFinite(_initRMin) && _initRMin >= SLIDER_MIN) ? _initRMin : 2.5;
+rViewMax = (isFinite(_initRMax) && _initRMax <= SLIDER_MAX && _initRMax > rViewMin) ? _initRMax : 4.0;
+bif.xMin = rViewMin;
+bif.xMax = rViewMax;
+
+buildBifurcation(); // also calls buildBifBg()
+updateRangeSliderUI();
+document.getElementById('range-info').textContent =
+  `range: ${rViewMin.toFixed(2)} – ${rViewMax.toFixed(2)}`;
 setR(isFinite(_initR) ? _initR : 3.5);
 </script>
 </body>
