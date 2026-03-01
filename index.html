@@ -240,7 +240,7 @@
 const DATA_MIN = 0, DATA_MAX = 4.0;   // full data range (always computed)
 const SLIDER_MIN = 0, SLIDER_MAX = 4.0; // slider absolute limits
 const WARM_UP = 500, CAPTURE = 300;
-const BIF_STEPS = 2400; // higher res since we cover full 0-4 range
+const BIF_STEPS = 24000; // high res across full 0-4 range
 
 // ─── Shared layout ────────────────────────────────────────────────────────────
 const PAD = { top: 36, bottom: 44, left: 52, right: 16 };
@@ -466,7 +466,7 @@ function drawCobwebPath(r, startX, orbit) {
   if (!discardWarmup) {
     cCtx.save();
     cCtx.lineWidth = 0.8;
-    cCtx.strokeStyle = 'rgba(126, 232, 250, 0.18)';
+    cCtx.strokeStyle = 'rgba(251, 188, 5, 0.5)';
     cCtx.setLineDash([2, 3]);
     let x = startX;
     // First segment from x-axis: (x0, 0) → (x0, f(x0))
@@ -555,7 +555,7 @@ function drawCobweb(r, orbit) {
   cCtx.restore();
 
   // Cobweb path
-  const startX = randomX0 ? 0.2 : x0;
+  const startX = randomX0 ? Math.random() : x0;
   drawCobwebPath(r, startX, orbit);
 
   // Attractor dots
@@ -576,12 +576,6 @@ function drawCobweb(r, orbit) {
     const mx = toCanvasX(cobweb, x0);
     const my = cobweb.y1; // bottom of plot area
     cCtx.save();
-    // Vertical dashed line from x-axis up
-    cCtx.strokeStyle = 'rgba(251,188,5,0.4)';
-    cCtx.lineWidth = 1;
-    cCtx.setLineDash([3, 3]);
-    cCtx.beginPath(); cCtx.moveTo(mx, my); cCtx.lineTo(mx, cobweb.y0); cCtx.stroke();
-    cCtx.setLineDash([]);
     // Diamond marker on the axis
     cCtx.fillStyle = '#fbbf24';
     cCtx.strokeStyle = '#0d1117';
