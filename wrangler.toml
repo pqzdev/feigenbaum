@@ -1,0 +1,11 @@
+name = "feigenbaum"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[build]
+command = ""
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true

@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feigenbaum Explorer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    letter-spacing: 0.1em;
+    color: #7ee8fa;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+  #charts {
+    display: flex;
+    gap: 0;
+    align-items: flex-start;
+  }
+  canvas {
+    display: block;
+    background: #161b22;
+    border: 1px solid #30363d;
+  }
+  #cobweb-canvas { border-right: none; }
+  #guide-canvas  { border-left: none; border-right: none; background: #0d1117; }
+  #controls {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 900px;
+  }
+  #r-display {
+    font-size: 1.6rem;
+    color: #7ee8fa;
+    letter-spacing: 0.05em;
+  }
+  #r-label { color: #8b949e; font-size: 0.85rem; }
+  #buttons-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    max-width: 860px;
+  }
+  .btn-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-label {
+    color: #8b949e;
+    font-size: 0.75rem;
+    width: 80px;
+    text-align: center;
+  }
+  button {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    font-family: 'Courier New', monospace;
+    font-size: 0.78rem;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    min-width: 88px;
+  }
+  button:hover { background: #30363d; border-color: #58a6ff; color: #7ee8fa; }
+  button:active { background: #388bfd22; }
+  #range-info {
+    color: #8b949e;
+    font-size: 0.75rem;
+  }
+  #wiki-links {
+    display: flex;
+    gap: 32px;
+    margin-top: 8px;
+    width: 900px;
+    justify-content: space-around;
+  }
+  #wiki-links a {
+    color: #8b949e;
+    font-size: 0.75rem;
+    text-decoration: none;
+    letter-spacing: 0.03em;
+  }
+  #wiki-links a:hover { color: #7ee8fa; text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>Feigenbaum Explorer</h1>
+<div id="charts">
+  <canvas id="cobweb-canvas" width="450" height="420"></canvas>
+  <canvas id="guide-canvas" width="24" height="420"></canvas>
+  <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+</div>
+<div id="wiki-links">
+  <a href="https://en.wikipedia.org/wiki/Cobweb_plot" target="_blank" rel="noopener">Cobweb plot ↗</a>
+  <a href="https://en.wikipedia.org/wiki/Bifurcation_diagram" target="_blank" rel="noopener">Bifurcation diagram ↗</a>
+</div>
+<div id="controls">
+  <div>
+    <span id="r-label">r = </span><span id="r-display">3.5000000</span>
+  </div>
+  <div id="buttons-grid"></div>
+  <div id="range-info">range: 2.5 – 4.0</div>
+</div>
+
+<script>
+// ─── Constants ────────────────────────────────────────────────────────────────
+const R_MIN = 2.5, R_MAX = 4.0;
+const WARM_UP = 500, CAPTURE = 300;
+const BIF_STEPS = 1200; // r resolution for bifurcation diagram
+
+// ─── Shared layout ────────────────────────────────────────────────────────────
+// Both canvases: left margin for y-axis, right margin, top/bottom padding
+const PAD = { top: 36, bottom: 44, left: 52, right: 16 };
+const COBWEB_W = 450, COBWEB_H = 420;
+const BIF_W = 450, BIF_H = 420;
+
+// Plot regions
+const cobweb = {
+  x0: PAD.left, x1: COBWEB_W - PAD.right,
+  y0: PAD.top,  y1: COBWEB_H - PAD.bottom,
+  // domain/range both 0..1
+  xMin: 0, xMax: 1,
+  yMin: 0, yMax: 1,
+};
+const bif = {
+  x0: PAD.left, x1: BIF_W - PAD.right,
+  y0: PAD.top,  y1: BIF_H - PAD.bottom,
+  xMin: R_MIN, xMax: R_MAX,
+  yMin: 0,     yMax: 1,
+};
+
+// ─── Canvas setup ─────────────────────────────────────────────────────────────
+const cobwebCanvas = document.getElementById('cobweb-canvas');
+const bifCanvas    = document.getElementById('bifurcation-canvas');
+const ctxC = cobwebCanvas.getContext('2d');
+const ctxB = bifCanvas.getContext('2d');
+
+// DPR scaling for sharp rendering
+function setupCanvas(canvas, w, h) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width  = w + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+const guideCanvas  = document.getElementById('guide-canvas');
+const GUIDE_W = 24;
+const cCtx = setupCanvas(cobwebCanvas, COBWEB_W, COBWEB_H);
+const bCtx = setupCanvas(bifCanvas,    BIF_W,    BIF_H);
+const gCtx = setupCanvas(guideCanvas,  GUIDE_W,  COBWEB_H);
+
+// ─── Coordinate helpers ───────────────────────────────────────────────────────
+function toCanvasX(region, v) {
+  return region.x0 + (v - region.xMin) / (region.xMax - region.xMin) * (region.x1 - region.x0);
+}
+function toCanvasY(region, v) {
+  // y=0 at bottom
+  return region.y1 - (v - region.yMin) / (region.yMax - region.yMin) * (region.y1 - region.y0);
+}
+
+// ─── Draw helpers ─────────────────────────────────────────────────────────────
+function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
+  ctx.save();
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '11px Courier New';
+
+  // Border
+  ctx.strokeRect(region.x0, region.y0, region.x1 - region.x0, region.y1 - region.y0);
+
+  // Grid + x ticks
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (const t of xTicks) {
+    const cx = toCanvasX(region, t);
+    ctx.beginPath();
+    ctx.moveTo(cx, region.y0);
+    ctx.lineTo(cx, region.y1);
+    ctx.strokeStyle = '#21262d';
+    ctx.stroke();
+    ctx.strokeStyle = '#30363d';
+    ctx.fillText(t.toFixed(1), cx, region.y1 + 4);
+  }
+
+  // Grid + y ticks
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const t of yTicks) {
+    const cy = toCanvasY(region, t);
+    ctx.beginPath();
+    ctx.moveTo(region.x0, cy);
+    ctx.lineTo(region.x1, cy);
+    ctx.strokeStyle = '#21262d';
+    ctx.stroke();
+    ctx.strokeStyle = '#30363d';
+    ctx.fillText(t.toFixed(1), region.x0 - 4, cy);
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '12px Courier New';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(xLabel, (region.x0 + region.x1) / 2, h - 2);
+
+  ctx.save();
+  ctx.translate(12, (region.y0 + region.y1) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textBaseline = 'top';
+  ctx.fillText(yLabel, 0, 0);
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// ─── Logistic map ─────────────────────────────────────────────────────────────
+function logistic(r, x) { return r * x * (1 - x); }
+
+// ─── Bifurcation data ─────────────────────────────────────────────────────────
+let bifPoints = []; // [{r, x}]
+
+function buildBifurcation() {
+  bifPoints = [];
+  const rStep = (R_MAX - R_MIN) / BIF_STEPS;
+  for (let i = 0; i <= BIF_STEPS; i++) {
+    const r = R_MIN + i * rStep;
+    let x = 0.5;
+    for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
+    const seen = new Set();
+    for (let j = 0; j < CAPTURE; j++) {
+      x = logistic(r, x);
+      const key = Math.round(x * 1e7);
+      if (seen.has(key)) break;
+      seen.add(key);
+      bifPoints.push({ r, x });
+    }
+  }
+  buildBifBg();
+}
+
+// ─── Draw bifurcation ─────────────────────────────────────────────────────────
+let bifBgImage = null; // cached background (axes + points, no line)
+
+function buildBifBg() {
+  // Draw into an offscreen canvas, then cache as ImageBitmap
+  const off = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  off.width  = BIF_W * dpr;
+  off.height = BIF_H * dpr;
+  const ctx = off.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, 0, BIF_W, BIF_H);
+
+  // Title
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '13px Courier New';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Bifurcation Diagram', (bif.x0 + bif.x1) / 2, 6);
+
+  // Axes
+  const xTicks = [];
+  for (let r = Math.ceil(R_MIN * 10) / 10; r <= R_MAX + 1e-9; r = Math.round((r + 0.5) * 10) / 10) {
+    if (r >= R_MIN && r <= R_MAX) xTicks.push(r);
+  }
+  const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  drawAxes(ctx, bif, 'r', 'x', xTicks, yTicks, BIF_W, BIF_H);
+
+  // Points
+  ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
+  for (const { r, x } of bifPoints) {
+    const cx = toCanvasX(bif, r);
+    const cy = toCanvasY(bif, x);
+    ctx.fillRect(cx, cy, 1.2, 1.2);
+  }
+
+  bifBgImage = off;
+}
+
+function drawBifurcation(currentR, orbit) {
+  // Blit cached background
+  bCtx.drawImage(bifBgImage, 0, 0, BIF_W, BIF_H);
+
+  // Horizontal guide lines at attractor y-values
+  if (orbit && orbit.length > 0) {
+    bCtx.save();
+    bCtx.strokeStyle = 'rgba(45, 212, 191, 0.35)';
+    bCtx.lineWidth = 1;
+    bCtx.setLineDash([2, 3]);
+    for (const pt of orbit) {
+      const cy = toCanvasY(bif, pt);
+      bCtx.beginPath();
+      bCtx.moveTo(bif.x0, cy);
+      bCtx.lineTo(bif.x1, cy);
+      bCtx.stroke();
+    }
+    bCtx.setLineDash([]);
+    bCtx.restore();
+  }
+
+  // Vertical line at current r
+  const rx = toCanvasX(bif, currentR);
+  bCtx.save();
+  bCtx.strokeStyle = bifDragging ? '#7ee8fa' : '#388bfd';
+  bCtx.lineWidth = bifDragging ? 2.5 : 1.5;
+  bCtx.setLineDash([4, 3]);
+  bCtx.beginPath();
+  bCtx.moveTo(rx, bif.y0);
+  bCtx.lineTo(rx, bif.y1);
+  bCtx.stroke();
+  bCtx.setLineDash([]);
+
+  // Drag handle — small circle at top of line
+  bCtx.fillStyle = bifDragging ? '#7ee8fa' : '#388bfd';
+  bCtx.beginPath();
+  bCtx.arc(rx, bif.y0 + 8, 5, 0, Math.PI * 2);
+  bCtx.fill();
+  bCtx.restore();
+}
+
+// ─── Bifurcation canvas drag ───────────────────────────────────────────────────
+let bifDragging = false;
+const BIF_HIT = 12; // px hit zone either side of line
+
+function bifCanvasR(clientX) {
+  const rect = bifCanvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const pct = Math.max(0, Math.min(1, (x - bif.x0) / (bif.x1 - bif.x0)));
+  return R_MIN + pct * (R_MAX - R_MIN);
+}
+
+function nearLine(clientX) {
+  const rect = bifCanvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const lineX = toCanvasX(bif, currentR);
+  return Math.abs(x - lineX) <= BIF_HIT;
+}
+
+bifCanvas.addEventListener('mousedown', e => {
+  if (nearLine(e.clientX)) {
+    bifDragging = true;
+    setR(bifCanvasR(e.clientX));
+    e.preventDefault();
+  }
+});
+bifCanvas.addEventListener('touchstart', e => {
+  if (nearLine(e.touches[0].clientX)) {
+    bifDragging = true;
+    setR(bifCanvasR(e.touches[0].clientX));
+    e.preventDefault();
+  }
+}, { passive: false });
+bifCanvas.addEventListener('mousemove', e => {
+  const rect = bifCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const lineX = toCanvasX(bif, currentR);
+  bifCanvas.style.cursor = (Math.abs(x - lineX) <= BIF_HIT) ? 'ew-resize' : 'default';
+  if (bifDragging) setR(bifCanvasR(e.clientX));
+});
+document.addEventListener('mousemove', e => { if (bifDragging) setR(bifCanvasR(e.clientX)); });
+document.addEventListener('touchmove', e => { if (bifDragging) setR(bifCanvasR(e.touches[0].clientX)); }, { passive: false });
+document.addEventListener('mouseup',  () => { bifDragging = false; drawBifurcation(currentR); });
+document.addEventListener('touchend', () => { bifDragging = false; drawBifurcation(currentR); });
+
+// ─── Draw cobweb ──────────────────────────────────────────────────────────────
+function drawCobweb(r, orbit) {
+  cCtx.clearRect(0, 0, COBWEB_W, COBWEB_H);
+
+  // Title
+  cCtx.fillStyle = '#8b949e';
+  cCtx.font = '13px Courier New';
+  cCtx.textAlign = 'center';
+  cCtx.textBaseline = 'top';
+  cCtx.fillText(`Cobweb  (r = ${r.toFixed(7)})`, (cobweb.x0 + cobweb.x1) / 2, 6);
+
+  // Axes — same y ticks as bifurcation for alignment
+  const xTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  drawAxes(cCtx, cobweb, 'x', 'f(x)', xTicks, yTicks, COBWEB_W, COBWEB_H);
+
+  // Parabola: f(x) = r*x*(1-x)
+  cCtx.save();
+  cCtx.strokeStyle = '#f78166';
+  cCtx.lineWidth = 1.8;
+  cCtx.beginPath();
+  const steps = 400;
+  for (let i = 0; i <= steps; i++) {
+    const x = i / steps;
+    const y = logistic(r, x);
+    const cx = toCanvasX(cobweb, x);
+    const cy = toCanvasY(cobweb, y);
+    i === 0 ? cCtx.moveTo(cx, cy) : cCtx.lineTo(cx, cy);
+  }
+  cCtx.stroke();
+
+  // y = x diagonal
+  cCtx.strokeStyle = '#3fb950';
+  cCtx.lineWidth = 1.2;
+  cCtx.setLineDash([5, 4]);
+  cCtx.beginPath();
+  cCtx.moveTo(toCanvasX(cobweb, 0), toCanvasY(cobweb, 0));
+  cCtx.lineTo(toCanvasX(cobweb, 1), toCanvasY(cobweb, 1));
+  cCtx.stroke();
+  cCtx.setLineDash([]);
+  cCtx.restore();
+
+  // Cobweb path — draw each segment individually at low alpha so
+  // density accumulates: periodic orbits glow, chaos stays dim.
+  const COBWEB_ITER = 2000;
+  let x = 0.2;
+  for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
+
+  cCtx.save();
+  cCtx.lineWidth = 1.0;
+  cCtx.strokeStyle = 'rgba(126, 232, 250, 0.08)';
+
+  for (let j = 0; j < COBWEB_ITER; j++) {
+    const fx = logistic(r, x);
+    const x0c = toCanvasX(cobweb, x);
+    const x1c = toCanvasX(cobweb, x);   // vertical: x stays same
+    const x2c = toCanvasX(cobweb, fx);  // horizontal: moves to fx
+    const y0c = toCanvasY(cobweb, x);   // start on diagonal
+    const y1c = toCanvasY(cobweb, fx);  // up/down to parabola
+    const y2c = toCanvasY(cobweb, fx);  // horizontal stays at fx
+
+    // vertical segment
+    cCtx.beginPath();
+    cCtx.moveTo(x0c, y0c);
+    cCtx.lineTo(x1c, y1c);
+    cCtx.stroke();
+    // horizontal segment
+    cCtx.beginPath();
+    cCtx.moveTo(x1c, y1c);
+    cCtx.lineTo(x2c, y2c);
+    cCtx.stroke();
+
+    x = fx;
+  }
+  cCtx.restore();
+
+  // Attractor dots on the parabola at (pt, f(pt))
+  if (orbit.length > 0) {
+    cCtx.save();
+    for (const pt of orbit) {
+      const fx = logistic(r, pt);
+      const px = toCanvasX(cobweb, pt);
+      const py = toCanvasY(cobweb, fx);
+      cCtx.beginPath();
+      cCtx.arc(px, py, 4, 0, Math.PI * 2);
+      cCtx.fillStyle = '#2dd4bf';
+      cCtx.fill();
+      cCtx.strokeStyle = '#0d1117';
+      cCtx.lineWidth = 1;
+      cCtx.stroke();
+    }
+    cCtx.restore();
+  }
+}
+
+// ─── Guide canvas (horizontal connectors between charts) ──────────────────────
+// orbitPts is the attractor set; pass [] to clear.
+function drawGuides(orbitPts) {
+  gCtx.clearRect(0, 0, GUIDE_W, COBWEB_H);
+  if (orbitPts.length === 0) return;
+
+  gCtx.save();
+  gCtx.strokeStyle = 'rgba(45, 212, 191, 0.55)'; // teal, same as dots
+  gCtx.lineWidth = 1;
+  gCtx.setLineDash([2, 3]);
+
+  for (const pt of orbitPts) {
+    // The cobweb y-axis maps x∈[0,1] to canvas coords using toCanvasY(cobweb, ·)
+    // The guide canvas shares the same PAD.top/bottom so the same formula applies.
+    const cy = toCanvasY(cobweb, pt);
+    gCtx.beginPath();
+    gCtx.moveTo(0, cy);
+    gCtx.lineTo(GUIDE_W, cy);
+    gCtx.stroke();
+  }
+
+  gCtx.setLineDash([]);
+  gCtx.restore();
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let currentR = 3.5;
+
+function clampR(r) {
+  return Math.max(R_MIN, Math.min(R_MAX, r));
+}
+
+function computeOrbit(r) {
+  const DOT_WARM = 800, DOT_CAP = 512;
+  let ax = 0.2;
+  for (let j = 0; j < DOT_WARM; j++) ax = logistic(r, ax);
+  const orbitMap = new Map();
+  for (let j = 0; j < DOT_CAP; j++) {
+    ax = logistic(r, ax);
+    const key = Math.round(ax * 1e9);
+    orbitMap.set(key, ax);
+  }
+  const pts = [...orbitMap.values()];
+  return pts.length <= 64 ? pts : [];
+}
+
+function setR(r) {
+  currentR = clampR(r);
+  document.getElementById('r-display').textContent = currentR.toFixed(7);
+  history.replaceState(null, '', '?r=' + currentR.toFixed(7));
+  const orbit = computeOrbit(currentR);
+  drawCobweb(currentR, orbit);
+  drawGuides(orbit);
+  drawBifurcation(currentR, orbit);
+}
+
+// ─── Increment buttons ────────────────────────────────────────────────────────
+const STEPS = [0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001, 0.0000001];
+
+function buildButtons() {
+  const grid = document.getElementById('buttons-grid');
+  for (const step of STEPS) {
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+
+    const decBtn = document.createElement('button');
+    decBtn.textContent = `− ${step}`;
+    decBtn.addEventListener('click', () => setR(currentR - step));
+
+    const label = document.createElement('span');
+    label.className = 'step-label';
+    label.textContent = `± ${step}`;
+
+    const incBtn = document.createElement('button');
+    incBtn.textContent = `+ ${step}`;
+    incBtn.addEventListener('click', () => setR(currentR + step));
+
+    row.appendChild(decBtn);
+    row.appendChild(label);
+    row.appendChild(incBtn);
+    grid.appendChild(row);
+  }
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+buildButtons();
+buildBifurcation();
+const _initR = parseFloat(new URLSearchParams(location.search).get('r'));
+setR(isFinite(_initR) ? _initR : 3.5);
+</script>
+</body>
+</html>
