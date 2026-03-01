@@ -92,6 +92,32 @@
     font-size: 0.68rem;
     white-space: nowrap;
   }
+  #btn-reset-zoom {
+    margin-left: auto;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-family: 'Courier New', monospace;
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #btn-reset-zoom:hover { border-color: #58a6ff; color: #7ee8fa; background: #30363d; }
+  /* Box-select overlay */
+  #bif-wrapper {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
+  #sel-rect {
+    position: absolute;
+    border: 1px solid rgba(56,139,253,0.8);
+    background: rgba(56,139,253,0.08);
+    pointer-events: none;
+    display: none;
+  }
   /* ── Range slider ── */
   #range-slider {
     position: relative;
@@ -228,12 +254,15 @@
   </div>
   <canvas id="guide-canvas" width="24" height="420"></canvas>
   <div id="bif-col">
-    <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+    <div id="bif-wrapper">
+      <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+      <div id="sel-rect"></div>
+    </div>
     <div id="bif-options">
       <label class="opt-row">
         <input type="checkbox" id="chk-log"> log₁₀ scale
       </label>
-      <span id="bif-hint">scroll=zoom · drag=pan · dbl=reset</span>
+      <button id="btn-reset-zoom">Reset zoom</button>
     </div>
     <div id="range-slider">
       <div id="rs-track"><div id="rs-fill"></div></div>
@@ -534,12 +563,13 @@ function drawBifurcation(currentR, orbit) {
 }
 
 // ─── Bifurcation canvas interactions ──────────────────────────────────────────
-let bifDragging = false;
-let bifPanning  = false;
-let panStartPx  = null;
-let panStartPy  = null;
-let panR0 = null, panR1 = null, panX0 = null, panX1 = null;
-const BIF_HIT = 12;
+let bifDragging  = false;
+let bifSelecting = false;
+let selStartPx   = null;
+let selStartPy   = null;
+const BIF_HIT  = 12;
+const MIN_SEL  = 4; // px — ignore tiny accidental drags
+const selRect  = document.getElementById('sel-rect');
 
 function bifCanvasR(clientX) {
   const rect = bifCanvas.getBoundingClientRect();
@@ -562,18 +592,39 @@ function inPlotArea(clientX, clientY) {
   return px >= bif.x0 && px <= bif.x1 && py >= bif.y0 && py <= bif.y1;
 }
 
+// Clamp a canvas-pixel x/y to the plot area
+function clampPlotPx(px, py) {
+  return [
+    Math.max(bif.x0, Math.min(bif.x1, px)),
+    Math.max(bif.y0, Math.min(bif.y1, py)),
+  ];
+}
+
+function updateSelRect(ax, ay, bx, by) {
+  const x = Math.min(ax, bx), y = Math.min(ay, by);
+  const w = Math.abs(bx - ax),  h = Math.abs(by - ay);
+  selRect.style.left   = x + 'px';
+  selRect.style.top    = y + 'px';
+  selRect.style.width  = w + 'px';
+  selRect.style.height = h + 'px';
+  selRect.style.display = 'block';
+}
+
+function hideSelRect() {
+  selRect.style.display = 'none';
+}
+
 bifCanvas.addEventListener('mousedown', e => {
   if (nearLine(e.clientX)) {
     bifDragging = true;
     setR(bifCanvasR(e.clientX));
   } else if (inPlotArea(e.clientX, e.clientY)) {
-    bifPanning = true;
+    bifSelecting = true;
     const rect = bifCanvas.getBoundingClientRect();
-    panStartPx = e.clientX - rect.left;
-    panStartPy = e.clientY - rect.top;
-    panR0 = bif.xMin; panR1 = bif.xMax;
-    panX0 = bif.yMin; panX1 = bif.yMax;
-    bifCanvas.style.cursor = 'grabbing';
+    selStartPx = e.clientX - rect.left;
+    selStartPy = e.clientY - rect.top;
+    hideSelRect();
+    bifCanvas.style.cursor = 'crosshair';
   }
   e.preventDefault();
 });
@@ -587,16 +638,14 @@ bifCanvas.addEventListener('touchstart', e => {
 }, { passive: false });
 
 bifCanvas.addEventListener('mousemove', e => {
-  if (bifDragging) {
-    setR(bifCanvasR(e.clientX));
-    return;
-  }
+  if (bifDragging) { setR(bifCanvasR(e.clientX)); return; }
+  if (bifSelecting) return; // document listener handles this
   const rect = bifCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   if (Math.abs(x - toCanvasX(bif, currentR)) <= BIF_HIT) {
     bifCanvas.style.cursor = 'ew-resize';
   } else if (inPlotArea(e.clientX, e.clientY)) {
-    bifCanvas.style.cursor = 'grab';
+    bifCanvas.style.cursor = 'crosshair';
   } else {
     bifCanvas.style.cursor = 'default';
   }
@@ -605,15 +654,13 @@ bifCanvas.addEventListener('mousemove', e => {
 document.addEventListener('mousemove', e => {
   if (bifDragging) {
     setR(bifCanvasR(e.clientX));
-  } else if (bifPanning) {
+  } else if (bifSelecting) {
     const rect = bifCanvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const plotW = bif.x1 - bif.x0;
-    const plotH = bif.y1 - bif.y0;
-    const dr = (panStartPx - px) / plotW * (panR1 - panR0);
-    const dx = (py - panStartPy) / plotH * (panX1 - panX0);
-    setZoom(panR0 + dr, panR1 + dr, panX0 + dx, panX1 + dx);
+    const curPx = e.clientX - rect.left;
+    const curPy = e.clientY - rect.top;
+    const [cx, cy] = clampPlotPx(curPx, curPy);
+    const [sx, sy] = clampPlotPx(selStartPx, selStartPy);
+    updateSelRect(sx, sy, cx, cy);
   }
 });
 
@@ -621,33 +668,33 @@ document.addEventListener('touchmove', e => {
   if (bifDragging) setR(bifCanvasR(e.touches[0].clientX));
 }, { passive: false });
 
-document.addEventListener('mouseup', () => {
+document.addEventListener('mouseup', e => {
   if (bifDragging) { bifDragging = false; setR(currentR); }
-  if (bifPanning)  { bifPanning = false; bifCanvas.style.cursor = 'grab'; }
+  if (bifSelecting) {
+    bifSelecting = false;
+    hideSelRect();
+    bifCanvas.style.cursor = 'crosshair';
+
+    const rect = bifCanvas.getBoundingClientRect();
+    const endPx = e.clientX - rect.left;
+    const endPy = e.clientY - rect.top;
+    const [ex, ey] = clampPlotPx(endPx, endPy);
+    const [sx, sy] = clampPlotPx(selStartPx, selStartPy);
+
+    const dx = Math.abs(ex - sx), dy = Math.abs(ey - sy);
+    if (dx < MIN_SEL || dy < MIN_SEL) return; // too small — ignore
+
+    const plotW = bif.x1 - bif.x0, plotH = bif.y1 - bif.y0;
+    const r0 = bif.xMin + (Math.min(sx, ex) - bif.x0) / plotW * (bif.xMax - bif.xMin);
+    const r1 = bif.xMin + (Math.max(sx, ex) - bif.x0) / plotW * (bif.xMax - bif.xMin);
+    const x1 = bif.yMax - (Math.min(sy, ey) - bif.y0) / plotH * (bif.yMax - bif.yMin);
+    const x0 = bif.yMax - (Math.max(sy, ey) - bif.y0) / plotH * (bif.yMax - bif.yMin);
+    setZoom(r0, r1, x0, x1);
+  }
 });
 document.addEventListener('touchend', () => {
   if (bifDragging) { bifDragging = false; setR(currentR); }
 });
-
-// Mouse wheel zoom
-bifCanvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  const factor = e.deltaY > 0 ? 1.3 : 1 / 1.3;
-  const rect = bifCanvas.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const py = e.clientY - rect.top;
-  const fx = Math.max(0, Math.min(1, (px - bif.x0) / (bif.x1 - bif.x0)));
-  const fy = Math.max(0, Math.min(1, (py - bif.y0) / (bif.y1 - bif.y0)));
-  const rC = bif.xMin + fx * (bif.xMax - bif.xMin);
-  const xC = bif.yMax - fy * (bif.yMax - bif.yMin);
-  const rSpan = (bif.xMax - bif.xMin) * factor;
-  const xSpan = (bif.yMax - bif.yMin) * factor;
-  setZoom(rC - fx * rSpan, rC + (1 - fx) * rSpan,
-          xC - (1 - fy) * xSpan, xC + fy * xSpan);
-}, { passive: false });
-
-// Double-click to reset zoom
-bifCanvas.addEventListener('dblclick', () => setZoom(DATA_MIN, DATA_MAX, 0, 1));
 
 // ─── Draw cobweb ──────────────────────────────────────────────────────────────
 function drawCobwebPath(r, startX, orbit) {
@@ -901,6 +948,9 @@ chkLog.addEventListener('change', () => {
   logScale = chkLog.checked;
   buildBifHeatmap();
   setR(currentR);
+});
+document.getElementById('btn-reset-zoom').addEventListener('click', () => {
+  setZoom(DATA_MIN, DATA_MAX, 0, 1);
 });
 
 // ─── x0 drag on cobweb canvas x-axis ─────────────────────────────────────────
