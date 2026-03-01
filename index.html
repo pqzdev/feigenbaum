@@ -109,12 +109,15 @@
     background: #21262d;
     border: 1px solid #30363d;
     color: #8b949e;
-    font-family: 'Courier New', monospace;
-    font-size: 0.72rem;
-    padding: 3px 8px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
     border-radius: 4px;
     cursor: pointer;
-    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
   /* Box-select overlay */
   #bif-wrapper {
@@ -274,8 +277,8 @@
         <input type="checkbox" id="chk-log"> log₁₀ scale
       </label>
       <span id="bif-computing" style="display:none;color:#484f58;font-size:0.68rem;margin-left:6px;">computing…</span>
-      <button id="btn-zoom-in"  title="Zoom in">🔍+</button>
-      <button id="btn-zoom-out" title="Zoom out">🔍−</button>
+      <button id="btn-zoom-in"  title="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/><line x1="10.5" y1="10.5" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6.5" y1="4.5" x2="6.5" y2="8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <button id="btn-zoom-out" title="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.5"/><line x1="10.5" y1="10.5" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       <button id="btn-reset-zoom">Reset zoom</button>
     </div>
     <div id="range-slider">
