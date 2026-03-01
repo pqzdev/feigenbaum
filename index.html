@@ -27,6 +27,7 @@
     display: flex;
     gap: 0;
     align-items: flex-start;
+    position: relative;
   }
   canvas {
     display: block;
@@ -35,6 +36,12 @@
   }
   #cobweb-canvas { border-right: none; }
   #guide-canvas  { border-left: none; border-right: none; background: #0d1117; }
+  #guide-svg {
+    position: absolute;
+    top: 0; left: 0;
+    pointer-events: none;
+    overflow: visible;
+  }
   #controls {
     margin-top: 16px;
     display: flex;
@@ -110,6 +117,7 @@
   <canvas id="cobweb-canvas" width="450" height="420"></canvas>
   <canvas id="guide-canvas" width="24" height="420"></canvas>
   <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+  <svg id="guide-svg" width="924" height="420"></svg>
 </div>
 <div id="wiki-links">
   <a href="https://en.wikipedia.org/wiki/Cobweb_plot" target="_blank" rel="noopener">Cobweb plot ↗</a>
@@ -308,23 +316,6 @@ function drawBifurcation(currentR, orbit) {
   // Blit cached background
   bCtx.drawImage(bifBgImage, 0, 0, BIF_W, BIF_H);
 
-  // Horizontal guide lines at attractor y-values
-  if (orbit && orbit.length > 0) {
-    bCtx.save();
-    bCtx.strokeStyle = 'rgba(45, 212, 191, 0.35)';
-    bCtx.lineWidth = 1;
-    bCtx.setLineDash([2, 3]);
-    for (const pt of orbit) {
-      const cy = toCanvasY(bif, pt);
-      bCtx.beginPath();
-      bCtx.moveTo(bif.x0, cy);
-      bCtx.lineTo(bif.x1, cy);
-      bCtx.stroke();
-    }
-    bCtx.setLineDash([]);
-    bCtx.restore();
-  }
-
   // Vertical line at current r
   const rx = toCanvasX(bif, currentR);
   bCtx.save();
@@ -386,8 +377,8 @@ bifCanvas.addEventListener('mousemove', e => {
 });
 document.addEventListener('mousemove', e => { if (bifDragging) setR(bifCanvasR(e.clientX)); });
 document.addEventListener('touchmove', e => { if (bifDragging) setR(bifCanvasR(e.touches[0].clientX)); }, { passive: false });
-document.addEventListener('mouseup',  () => { bifDragging = false; drawBifurcation(currentR); });
-document.addEventListener('touchend', () => { bifDragging = false; drawBifurcation(currentR); });
+document.addEventListener('mouseup',  () => { if (bifDragging) { bifDragging = false; setR(currentR); } });
+document.addEventListener('touchend', () => { if (bifDragging) { bifDragging = false; setR(currentR); } });
 
 // ─── Draw cobweb ──────────────────────────────────────────────────────────────
 function drawCobweb(r, orbit) {
@@ -484,29 +475,33 @@ function drawCobweb(r, orbit) {
   }
 }
 
-// ─── Guide canvas (horizontal connectors between charts) ──────────────────────
-// orbitPts is the attractor set; pass [] to clear.
-function drawGuides(orbitPts) {
-  gCtx.clearRect(0, 0, GUIDE_W, COBWEB_H);
+// ─── SVG guide lines (dot on cobweb parabola → r-line on bifurcation) ─────────
+const guideSvg = document.getElementById('guide-svg');
+// SVG x-offsets: cobweb is [0, COBWEB_W), guide is [COBWEB_W, COBWEB_W+GUIDE_W), bif starts after
+const BIF_SVG_OFFSET = COBWEB_W + GUIDE_W; // 924 = 450+24+450
+
+function drawGuides(orbitPts, r) {
+  // Clear previous lines
+  while (guideSvg.firstChild) guideSvg.removeChild(guideSvg.firstChild);
   if (orbitPts.length === 0) return;
 
-  gCtx.save();
-  gCtx.strokeStyle = 'rgba(45, 212, 191, 0.55)'; // teal, same as dots
-  gCtx.lineWidth = 1;
-  gCtx.setLineDash([2, 3]);
+  const rLineX = BIF_SVG_OFFSET + toCanvasX(bif, r);
 
   for (const pt of orbitPts) {
-    // The cobweb y-axis maps x∈[0,1] to canvas coords using toCanvasY(cobweb, ·)
-    // The guide canvas shares the same PAD.top/bottom so the same formula applies.
-    const cy = toCanvasY(cobweb, pt);
-    gCtx.beginPath();
-    gCtx.moveTo(0, cy);
-    gCtx.lineTo(GUIDE_W, cy);
-    gCtx.stroke();
-  }
+    const fx   = logistic(r, pt);
+    const dotX = toCanvasX(cobweb, pt);   // x of dot on parabola (cobweb canvas space)
+    const dotY = toCanvasY(cobweb, fx);   // y of dot (same scale across all canvases)
 
-  gCtx.setLineDash([]);
-  gCtx.restore();
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', dotX);
+    line.setAttribute('y1', dotY);
+    line.setAttribute('x2', rLineX);
+    line.setAttribute('y2', dotY);
+    line.setAttribute('stroke', 'rgba(45,212,191,0.5)');
+    line.setAttribute('stroke-width', '1');
+    line.setAttribute('stroke-dasharray', '3 4');
+    guideSvg.appendChild(line);
+  }
 }
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -536,7 +531,7 @@ function setR(r) {
   history.replaceState(null, '', '?r=' + currentR.toFixed(7));
   const orbit = computeOrbit(currentR);
   drawCobweb(currentR, orbit);
-  drawGuides(orbit);
+  drawGuides(orbit, currentR);
   drawBifurcation(currentR, orbit);
 }
 
