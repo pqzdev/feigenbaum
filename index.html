@@ -58,6 +58,18 @@
     border: 1px solid #30363d;
     border-top: none;
   }
+  #bif-options {
+    width: 450px;
+    margin-top: 1px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-top: none;
+  }
   .opt-row {
     display: flex;
     align-items: center;
@@ -74,6 +86,12 @@
     flex-shrink: 0;
   }
   .opt-row:hover { color: #e6edf3; }
+  #bif-hint {
+    margin-left: auto;
+    color: #484f58;
+    font-size: 0.68rem;
+    white-space: nowrap;
+  }
   /* ── Range slider ── */
   #range-slider {
     position: relative;
@@ -211,6 +229,12 @@
   <canvas id="guide-canvas" width="24" height="420"></canvas>
   <div id="bif-col">
     <canvas id="bifurcation-canvas" width="450" height="420"></canvas>
+    <div id="bif-options">
+      <label class="opt-row">
+        <input type="checkbox" id="chk-log"> log₁₀ scale
+      </label>
+      <span id="bif-hint">scroll=zoom · drag=pan · dbl=reset</span>
+    </div>
     <div id="range-slider">
       <div id="rs-track"><div id="rs-fill"></div></div>
       <div id="thumb-min" class="rs-thumb"></div>
@@ -237,17 +261,56 @@
 
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
-const DATA_MIN = 0, DATA_MAX = 4.0;   // full data range (always computed)
-const SLIDER_MIN = 0, SLIDER_MAX = 4.0; // slider absolute limits
-const WARM_UP = 500, CAPTURE = 300;
-const BIF_STEPS = 24000; // high res across full 0-4 range
+const DATA_MIN = 0, DATA_MAX = 4.0;
+const SLIDER_MIN = 0, SLIDER_MAX = 4.0;
+const WARM_UP = 5000;
+const HEATMAP_ITER = 2000; // post-warmup iterations per column
+
+// ─── Viridis LUT (256 entries) ────────────────────────────────────────────────
+// Standard viridis colormap RGB values
+const VIRIDIS_DATA = [
+  68,1,84, 68,2,86, 69,4,87, 69,5,89, 70,7,90, 70,8,92, 70,10,93, 70,11,94,
+  71,13,96, 71,14,97, 71,16,99, 71,17,100, 71,19,101, 72,20,103, 72,22,104, 72,23,105,
+  72,24,106, 72,26,108, 72,27,109, 72,28,110, 72,30,111, 72,31,112, 72,32,113, 72,34,115,
+  72,35,116, 72,36,117, 72,38,118, 72,39,119, 72,40,120, 72,42,121, 72,43,122, 71,44,122,
+  71,46,123, 71,47,124, 71,48,125, 71,50,126, 70,51,127, 70,52,127, 70,54,128, 70,55,129,
+  69,56,130, 69,58,131, 69,59,131, 68,60,132, 68,62,133, 68,63,133, 67,64,134, 67,66,135,
+  67,67,135, 66,68,136, 66,70,137, 65,71,137, 65,72,138, 65,74,139, 64,75,139, 64,76,140,
+  63,78,141, 63,79,141, 62,80,142, 62,82,142, 62,83,143, 61,84,143, 61,86,144, 60,87,144,
+  60,88,145, 59,90,145, 59,91,146, 58,92,146, 58,94,147, 57,95,147, 57,96,148, 56,98,148,
+  56,99,149, 55,101,149, 55,102,150, 54,103,150, 54,105,151, 53,106,151, 52,107,151, 52,109,152,
+  51,110,152, 51,111,152, 50,113,153, 49,114,153, 49,115,153, 48,117,154, 48,118,154, 47,119,154,
+  47,121,155, 46,122,155, 45,123,155, 45,125,155, 44,126,156, 44,127,156, 43,128,156, 43,130,156,
+  42,131,157, 41,132,157, 41,134,157, 40,135,157, 40,136,157, 39,137,158, 38,139,158, 38,140,158,
+  37,141,158, 37,142,158, 36,144,158, 36,145,158, 35,146,159, 34,147,159, 34,149,159, 33,150,159,
+  33,151,159, 32,152,159, 32,154,159, 31,155,159, 30,156,159, 30,157,159, 29,158,159, 29,160,159,
+  28,161,159, 28,162,159, 27,163,159, 27,164,159, 26,166,159, 26,167,159, 25,168,159, 25,169,159,
+  24,170,158, 24,172,158, 23,173,158, 23,174,158, 22,175,158, 22,176,157, 21,177,157, 21,179,157,
+  20,180,156, 20,181,156, 20,182,155, 19,183,155, 19,184,155, 18,186,154, 18,187,154, 18,188,153,
+  17,189,152, 17,190,152, 17,191,151, 16,192,151, 16,193,150, 16,195,149, 16,196,149, 15,197,148,
+  15,198,147, 15,199,147, 15,200,146, 15,201,145, 15,202,144, 15,203,144, 15,204,143, 16,205,142,
+  16,206,141, 17,207,141, 17,208,140, 18,209,139, 19,210,138, 20,211,137, 21,212,136, 22,213,135,
+  23,214,135, 24,215,134, 26,216,133, 27,217,132, 29,218,131, 30,219,130, 32,220,129, 33,220,128,
+  35,221,127, 37,222,126, 39,223,125, 41,224,124, 43,225,123, 45,226,122, 48,227,121, 50,227,119,
+  52,228,118, 55,229,117, 57,230,116, 60,231,115, 62,232,114, 65,233,112, 67,234,111, 70,234,110,
+  73,235,109, 75,236,108, 78,237,106, 81,238,105, 83,238,104, 86,239,103, 89,240,101, 92,241,100,
+  95,241,99, 98,242,97, 101,243,96, 104,244,95, 107,244,93, 110,245,92, 113,246,91, 116,246,89,
+  119,247,88, 122,248,86, 125,248,85, 128,249,84, 131,249,82, 134,250,81, 137,251,79, 140,251,78,
+  143,252,76, 147,252,75, 150,253,73, 153,253,72, 156,254,70, 159,254,69, 163,255,67, 166,255,66,
+  169,255,64, 172,255,63, 176,254,62, 179,254,60, 182,254,59, 185,254,57, 189,253,56, 192,253,54,
+  195,253,53, 198,252,51, 201,252,50, 205,251,48, 208,251,47, 211,250,45, 214,250,43, 217,250,42,
+  221,249,40, 224,249,38, 227,248,37, 230,248,35, 233,247,33, 237,247,31, 240,246,30, 243,246,28,
+  246,245,26, 249,245,24, 252,244,22, 253,242,22, 253,240,21, 253,238,20, 253,236,20, 254,234,19,
+  254,232,18, 254,230,18, 254,228,17, 254,226,17, 254,224,16, 253,222,16, 253,220,15, 253,218,15
+];
+const VIRIDIS = new Uint8Array(VIRIDIS_DATA);
 
 // ─── Shared layout ────────────────────────────────────────────────────────────
 const PAD = { top: 36, bottom: 44, left: 52, right: 16 };
 const COBWEB_W = 450, COBWEB_H = 420;
 const BIF_W = 450, BIF_H = 420;
 
-// Plot regions — bif.xMin/xMax are mutable (driven by view range)
+// Plot regions
 const cobweb = {
   x0: PAD.left, x1: COBWEB_W - PAD.right,
   y0: PAD.top,  y1: COBWEB_H - PAD.bottom,
@@ -257,7 +320,7 @@ const cobweb = {
 const bif = {
   x0: PAD.left, x1: BIF_W - PAD.right,
   y0: PAD.top,  y1: BIF_H - PAD.bottom,
-  xMin: 2.5, xMax: 4.0,   // updated by setRange()
+  xMin: 2.5, xMax: 4.0,
   yMin: 0,   yMax: 1,
 };
 
@@ -290,6 +353,27 @@ function toCanvasY(region, v) {
 }
 
 // ─── Draw helpers ─────────────────────────────────────────────────────────────
+function niceStep(span, targetCount) {
+  const raw = span / targetCount;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const candidates = [1, 2, 2.5, 5, 10];
+  let best = candidates[candidates.length - 1];
+  for (const c of candidates) {
+    if (c * mag >= raw) { best = c; break; }
+  }
+  return best * mag;
+}
+
+function dynamicTicks(min, max, targetCount) {
+  const step = niceStep(max - min, targetCount);
+  const ticks = [];
+  const t0 = Math.ceil(min / step) * step;
+  for (let t = t0; t <= max + step * 1e-6; t = Math.round((t + step) / step) * step) {
+    ticks.push(t);
+  }
+  return ticks;
+}
+
 function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
   ctx.save();
   ctx.strokeStyle = '#30363d';
@@ -305,7 +389,10 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
     const cx = toCanvasX(region, t);
     ctx.beginPath(); ctx.moveTo(cx, region.y0); ctx.lineTo(cx, region.y1);
     ctx.strokeStyle = '#21262d'; ctx.stroke(); ctx.strokeStyle = '#30363d';
-    ctx.fillText(t.toFixed(2), cx, region.y1 + 4);
+    // Format tick label: show enough decimal places
+    const span = region.xMax - region.xMin;
+    const decimals = span < 0.001 ? 7 : span < 0.01 ? 6 : span < 0.1 ? 5 : span < 1 ? 4 : span < 10 ? 3 : 2;
+    ctx.fillText(t.toFixed(decimals), cx, region.y1 + 4);
   }
 
   ctx.textAlign = 'right';
@@ -314,7 +401,9 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
     const cy = toCanvasY(region, t);
     ctx.beginPath(); ctx.moveTo(region.x0, cy); ctx.lineTo(region.x1, cy);
     ctx.strokeStyle = '#21262d'; ctx.stroke(); ctx.strokeStyle = '#30363d';
-    ctx.fillText(t.toFixed(1), region.x0 - 4, cy);
+    const span = region.yMax - region.yMin;
+    const decimals = span < 0.001 ? 7 : span < 0.01 ? 6 : span < 0.1 ? 5 : span < 1 ? 4 : 3;
+    ctx.fillText(t.toFixed(decimals), region.x0 - 4, cy);
   }
 
   ctx.fillStyle = '#8b949e';
@@ -336,67 +425,87 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
 // ─── Logistic map ─────────────────────────────────────────────────────────────
 function logistic(r, x) { return r * x * (1 - x); }
 
-// ─── Bifurcation data (full 0–4 range, computed once) ─────────────────────────
-let bifPoints = [];
-
-function buildBifurcation() {
-  bifPoints = [];
-  const rStep = (DATA_MAX - DATA_MIN) / BIF_STEPS;
-  for (let i = 0; i <= BIF_STEPS; i++) {
-    const r = DATA_MIN + i * rStep;
-    let x = 0.5;
-    for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
-    const seen = new Set();
-    for (let j = 0; j < CAPTURE; j++) {
-      x = logistic(r, x);
-      const key = Math.round(x * 1e7);
-      if (seen.has(key)) break;
-      seen.add(key);
-      bifPoints.push({ r, x });
-    }
-  }
-  buildBifBg();
-}
-
-// ─── Draw bifurcation background (re-built on range change) ───────────────────
+// ─── Bifurcation heatmap ──────────────────────────────────────────────────────
 let bifBgImage = null;
 
-function buildBifBg() {
-  const off = document.createElement('canvas');
-  const dpr = window.devicePixelRatio || 1;
-  off.width  = BIF_W * dpr;
-  off.height = BIF_H * dpr;
-  const ctx = off.getContext('2d');
-  ctx.scale(dpr, dpr);
+function buildBifHeatmap() {
+  const W = Math.round(bif.x1 - bif.x0);
+  const H = Math.round(bif.y1 - bif.y0);
+  const rMin = bif.xMin, rMax = bif.xMax;
+  const xMin = bif.yMin, xMax = bif.yMax;
 
+  // Accumulate density: density[col * H + row]
+  const density = new Float32Array(W * H);
+
+  for (let col = 0; col < W; col++) {
+    const r = rMin + (col + 0.5) / W * (rMax - rMin);
+    let x = 0.5;
+    for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
+    for (let j = 0; j < HEATMAP_ITER; j++) {
+      x = logistic(r, x);
+      if (x >= xMin && x <= xMax) {
+        const row = Math.floor((xMax - x) / (xMax - xMin) * H);
+        if (row >= 0 && row < H) density[col * H + row]++;
+      }
+    }
+  }
+
+  // Find max for normalisation
+  let maxCount = 1;
+  for (let i = 0; i < density.length; i++) {
+    if (density[i] > maxCount) maxCount = density[i];
+  }
+  const logMax = Math.log10(1 + maxCount);
+
+  // Build ImageData for the plot area only
+  const off = document.createElement('canvas');
+  off.width  = BIF_W;
+  off.height = BIF_H;
+  const ctx = off.getContext('2d');
+
+  // Background
   ctx.fillStyle = '#161b22';
   ctx.fillRect(0, 0, BIF_W, BIF_H);
 
+  // Write pixel data for plot area
+  const imgData = ctx.getImageData(bif.x0, bif.y0, W, H);
+  const px = imgData.data;
+  const bg = [22, 27, 34]; // #161b22
+
+  for (let col = 0; col < W; col++) {
+    for (let row = 0; row < H; row++) {
+      const count = density[col * H + row];
+      const idx = (row * W + col) * 4;
+      if (count === 0) {
+        px[idx]   = bg[0];
+        px[idx+1] = bg[1];
+        px[idx+2] = bg[2];
+        px[idx+3] = 255;
+      } else {
+        const v = logScale
+          ? Math.log10(1 + count) / logMax
+          : count / maxCount;
+        const vi = Math.min(255, Math.floor(v * 255)) * 3;
+        px[idx]   = VIRIDIS[vi];
+        px[idx+1] = VIRIDIS[vi+1];
+        px[idx+2] = VIRIDIS[vi+2];
+        px[idx+3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(imgData, bif.x0, bif.y0);
+
+  // Title
   ctx.fillStyle = '#8b949e';
   ctx.font = '13px Courier New';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('Bifurcation Diagram', (bif.x0 + bif.x1) / 2, 6);
 
-  // Dynamic x-ticks: pick ~5 nice ticks within current view range
-  const span = bif.xMax - bif.xMin;
-  const step = span <= 0.2 ? 0.02 : span <= 0.5 ? 0.05 : span <= 1 ? 0.1 : span <= 2 ? 0.2 : 0.5;
-  const xTicks = [];
-  const t0 = Math.ceil(bif.xMin / step) * step;
-  for (let t = t0; t <= bif.xMax + 1e-9; t = Math.round((t + step) * 1e9) / 1e9) {
-    xTicks.push(t);
-  }
-  const yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
+  // Dynamic axes
+  const xTicks = dynamicTicks(bif.xMin, bif.xMax, 5);
+  const yTicks = dynamicTicks(bif.yMin, bif.yMax, 5);
   drawAxes(ctx, bif, 'r', 'x', xTicks, yTicks, BIF_W, BIF_H);
-
-  // Plot only points within view range
-  ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
-  for (const { r, x } of bifPoints) {
-    if (r < bif.xMin || r > bif.xMax) continue;
-    const cx = toCanvasX(bif, r);
-    const cy = toCanvasY(bif, x);
-    ctx.fillRect(cx, cy, 1.5, 1.5);
-  }
 
   bifBgImage = off;
 }
@@ -404,7 +513,6 @@ function buildBifBg() {
 function drawBifurcation(currentR, orbit) {
   bCtx.drawImage(bifBgImage, 0, 0, BIF_W, BIF_H);
 
-  // Only draw r-line if currentR is within view
   if (currentR < bif.xMin || currentR > bif.xMax) return;
 
   const rx = toCanvasX(bif, currentR);
@@ -425,8 +533,12 @@ function drawBifurcation(currentR, orbit) {
   bCtx.restore();
 }
 
-// ─── Bifurcation canvas drag ───────────────────────────────────────────────────
+// ─── Bifurcation canvas interactions ──────────────────────────────────────────
 let bifDragging = false;
+let bifPanning  = false;
+let panStartPx  = null;
+let panStartPy  = null;
+let panR0 = null, panR1 = null, panX0 = null, panX1 = null;
 const BIF_HIT = 12;
 
 function bifCanvasR(clientX) {
@@ -443,33 +555,108 @@ function nearLine(clientX) {
   return Math.abs(x - lineX) <= BIF_HIT;
 }
 
+function inPlotArea(clientX, clientY) {
+  const rect = bifCanvas.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+  return px >= bif.x0 && px <= bif.x1 && py >= bif.y0 && py <= bif.y1;
+}
+
 bifCanvas.addEventListener('mousedown', e => {
-  if (nearLine(e.clientX)) { bifDragging = true; setR(bifCanvasR(e.clientX)); e.preventDefault(); }
+  if (nearLine(e.clientX)) {
+    bifDragging = true;
+    setR(bifCanvasR(e.clientX));
+  } else if (inPlotArea(e.clientX, e.clientY)) {
+    bifPanning = true;
+    const rect = bifCanvas.getBoundingClientRect();
+    panStartPx = e.clientX - rect.left;
+    panStartPy = e.clientY - rect.top;
+    panR0 = bif.xMin; panR1 = bif.xMax;
+    panX0 = bif.yMin; panX1 = bif.yMax;
+    bifCanvas.style.cursor = 'grabbing';
+  }
+  e.preventDefault();
 });
+
 bifCanvas.addEventListener('touchstart', e => {
-  if (nearLine(e.touches[0].clientX)) { bifDragging = true; setR(bifCanvasR(e.touches[0].clientX)); e.preventDefault(); }
+  if (nearLine(e.touches[0].clientX)) {
+    bifDragging = true;
+    setR(bifCanvasR(e.touches[0].clientX));
+    e.preventDefault();
+  }
 }, { passive: false });
+
 bifCanvas.addEventListener('mousemove', e => {
+  if (bifDragging) {
+    setR(bifCanvasR(e.clientX));
+    return;
+  }
   const rect = bifCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
-  bifCanvas.style.cursor = (Math.abs(x - toCanvasX(bif, currentR)) <= BIF_HIT) ? 'ew-resize' : 'default';
-  if (bifDragging) setR(bifCanvasR(e.clientX));
+  if (Math.abs(x - toCanvasX(bif, currentR)) <= BIF_HIT) {
+    bifCanvas.style.cursor = 'ew-resize';
+  } else if (inPlotArea(e.clientX, e.clientY)) {
+    bifCanvas.style.cursor = 'grab';
+  } else {
+    bifCanvas.style.cursor = 'default';
+  }
 });
-document.addEventListener('mousemove', e => { if (bifDragging) setR(bifCanvasR(e.clientX)); });
-document.addEventListener('touchmove', e => { if (bifDragging) setR(bifCanvasR(e.touches[0].clientX)); }, { passive: false });
-document.addEventListener('mouseup',  () => { if (bifDragging) { bifDragging = false; setR(currentR); } });
-document.addEventListener('touchend', () => { if (bifDragging) { bifDragging = false; setR(currentR); } });
+
+document.addEventListener('mousemove', e => {
+  if (bifDragging) {
+    setR(bifCanvasR(e.clientX));
+  } else if (bifPanning) {
+    const rect = bifCanvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const plotW = bif.x1 - bif.x0;
+    const plotH = bif.y1 - bif.y0;
+    const dr = (panStartPx - px) / plotW * (panR1 - panR0);
+    const dx = (py - panStartPy) / plotH * (panX1 - panX0);
+    setZoom(panR0 + dr, panR1 + dr, panX0 + dx, panX1 + dx);
+  }
+});
+
+document.addEventListener('touchmove', e => {
+  if (bifDragging) setR(bifCanvasR(e.touches[0].clientX));
+}, { passive: false });
+
+document.addEventListener('mouseup', () => {
+  if (bifDragging) { bifDragging = false; setR(currentR); }
+  if (bifPanning)  { bifPanning = false; bifCanvas.style.cursor = 'grab'; }
+});
+document.addEventListener('touchend', () => {
+  if (bifDragging) { bifDragging = false; setR(currentR); }
+});
+
+// Mouse wheel zoom
+bifCanvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 1.3 : 1 / 1.3;
+  const rect = bifCanvas.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+  const fx = Math.max(0, Math.min(1, (px - bif.x0) / (bif.x1 - bif.x0)));
+  const fy = Math.max(0, Math.min(1, (py - bif.y0) / (bif.y1 - bif.y0)));
+  const rC = bif.xMin + fx * (bif.xMax - bif.xMin);
+  const xC = bif.yMax - fy * (bif.yMax - bif.yMin);
+  const rSpan = (bif.xMax - bif.xMin) * factor;
+  const xSpan = (bif.yMax - bif.yMin) * factor;
+  setZoom(rC - fx * rSpan, rC + (1 - fx) * rSpan,
+          xC - (1 - fy) * xSpan, xC + fy * xSpan);
+}, { passive: false });
+
+// Double-click to reset zoom
+bifCanvas.addEventListener('dblclick', () => setZoom(DATA_MIN, DATA_MAX, 0, 1));
 
 // ─── Draw cobweb ──────────────────────────────────────────────────────────────
 function drawCobwebPath(r, startX, orbit) {
-  // Draw transient (warm-up) path if discardWarmup=false, dimmer style
   if (!discardWarmup) {
     cCtx.save();
     cCtx.lineWidth = 0.8;
     cCtx.strokeStyle = 'rgba(251, 188, 5, 0.5)';
     cCtx.setLineDash([2, 3]);
     let x = startX;
-    // First segment from x-axis: (x0, 0) → (x0, f(x0))
     const fx0 = logistic(r, x);
     cCtx.beginPath();
     cCtx.moveTo(toCanvasX(cobweb, x), toCanvasY(cobweb, 0));
@@ -486,11 +673,8 @@ function drawCobwebPath(r, startX, orbit) {
     }
     cCtx.setLineDash([]);
     cCtx.restore();
-    // Main path continues from where warm-up left off (x is now the settled value)
-    // Fall through to main path drawing below with this x
     drawCobwebMain(r, x, orbit);
   } else {
-    // Discard: warm up silently then draw main path
     let x = startX;
     for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
     drawCobwebMain(r, x, orbit);
@@ -571,12 +755,11 @@ function drawCobweb(r, orbit) {
     cCtx.restore();
   }
 
-  // x0 marker on x-axis when not using random start
+  // x0 marker
   if (!randomX0) {
     const mx = toCanvasX(cobweb, x0);
-    const my = cobweb.y1; // bottom of plot area
+    const my = cobweb.y1;
     cCtx.save();
-    // Diamond marker on the axis
     cCtx.fillStyle = '#fbbf24';
     cCtx.strokeStyle = '#0d1117';
     cCtx.lineWidth = 1;
@@ -587,7 +770,6 @@ function drawCobweb(r, orbit) {
     cCtx.lineTo(mx - 6, my);
     cCtx.closePath();
     cCtx.fill(); cCtx.stroke();
-    // x0 value label
     cCtx.fillStyle = '#fbbf24';
     cCtx.font = '10px Courier New';
     cCtx.textAlign = mx > cobweb.x1 - 40 ? 'right' : 'left';
@@ -608,6 +790,8 @@ function drawGuides(orbitPts, r) {
   const rLineX = BIF_SVG_OFFSET + toCanvasX(bif, r);
   for (const pt of orbitPts) {
     const fx = logistic(r, pt);
+    // Only draw if orbit y value is within the bif y view range
+    if (fx < bif.yMin || fx > bif.yMax) continue;
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', toCanvasX(cobweb, pt));
     line.setAttribute('y1', toCanvasY(cobweb, fx));
@@ -624,6 +808,9 @@ function drawGuides(orbitPts, r) {
 let currentR      = 3.5;
 let rViewMin      = 2.5;
 let rViewMax      = 4.0;
+let bifYMin       = 0.0;
+let bifYMax       = 1.0;
+let logScale      = false;
 let discardWarmup = true;
 let randomX0      = true;
 let x0            = 0.2;
@@ -635,8 +822,11 @@ function clampR(r) {
 function pushURL() {
   const p = new URLSearchParams();
   p.set('r',       currentR.toFixed(7));
-  p.set('rMin',    rViewMin.toFixed(4));
-  p.set('rMax',    rViewMax.toFixed(4));
+  p.set('rMin',    rViewMin.toFixed(7));
+  p.set('rMax',    rViewMax.toFixed(7));
+  p.set('xMin',    bifYMin.toFixed(7));
+  p.set('xMax',    bifYMax.toFixed(7));
+  p.set('log',     logScale     ? '1' : '0');
   p.set('discard', discardWarmup ? '1' : '0');
   p.set('random',  randomX0      ? '1' : '0');
   if (!randomX0) p.set('x0', x0.toFixed(5));
@@ -666,22 +856,38 @@ function setR(r) {
   drawBifurcation(currentR, orbit);
 }
 
-function setRange(newMin, newMax) {
-  rViewMin = newMin;
-  rViewMax = newMax;
-  bif.xMin = newMin;
-  bif.xMax = newMax;
+// Debounced heatmap rebuild
+let _bifTimer = null;
+function scheduleBifHeatmap() {
+  clearTimeout(_bifTimer);
+  _bifTimer = setTimeout(() => { buildBifHeatmap(); setR(currentR); }, 80);
+}
+
+function setZoom(r0, r1, x0z, x1z) {
+  const MIN_SPAN = 1e-10;
+  r0 = Math.max(DATA_MIN, r0); r1 = Math.min(DATA_MAX, r1);
+  x0z = Math.max(0, x0z);      x1z = Math.min(1, x1z);
+  if (r1 - r0 < MIN_SPAN || x1z - x0z < MIN_SPAN) return;
+  rViewMin = r0; rViewMax = r1;
+  bifYMin  = x0z; bifYMax  = x1z;
+  bif.xMin = r0; bif.xMax = r1;
+  bif.yMin = x0z; bif.yMax = x1z;
   document.getElementById('range-info').textContent =
-    `range: ${newMin.toFixed(2)} – ${newMax.toFixed(2)}`;
+    `r: ${r0.toExponential(3)} – ${r1.toExponential(3)}`;
   updateRangeSliderUI();
-  buildBifBg();
-  // Clamp currentR to new range and redraw
-  setR(currentR);
+  scheduleBifHeatmap();
+  pushURL();
+}
+
+// Legacy setRange used by range slider
+function setRange(newMin, newMax) {
+  setZoom(newMin, newMax, bifYMin, bifYMax);
 }
 
 // ─── Checkbox options ─────────────────────────────────────────────────────────
 const chkDiscard = document.getElementById('chk-discard');
 const chkRandom  = document.getElementById('chk-random');
+const chkLog     = document.getElementById('chk-log');
 
 chkDiscard.addEventListener('change', () => {
   discardWarmup = chkDiscard.checked;
@@ -691,9 +897,14 @@ chkRandom.addEventListener('change', () => {
   randomX0 = chkRandom.checked;
   setR(currentR);
 });
+chkLog.addEventListener('change', () => {
+  logScale = chkLog.checked;
+  buildBifHeatmap();
+  setR(currentR);
+});
 
 // ─── x0 drag on cobweb canvas x-axis ─────────────────────────────────────────
-const X0_HIT = 12; // px hit radius around diamond marker
+const X0_HIT = 12;
 let x0Dragging = false;
 
 function x0FromClientX(clientX) {
@@ -747,15 +958,13 @@ document.addEventListener('mouseup',  () => { x0Dragging = false; });
 document.addEventListener('touchend', () => { x0Dragging = false; });
 
 // ─── Range slider ─────────────────────────────────────────────────────────────
-const rsContainer = document.getElementById('range-slider');
-const rsTrack     = document.getElementById('rs-track');
-const rsFill      = document.getElementById('rs-fill');
-const thumbMin    = document.getElementById('thumb-min');
-const thumbMax    = document.getElementById('thumb-max');
-const rsLabelMin  = document.getElementById('rs-label-min');
-const rsLabelMax  = document.getElementById('rs-label-max');
-
-const RS_GAP = 0.05; // minimum gap between handles
+const rsTrack    = document.getElementById('rs-track');
+const rsFill     = document.getElementById('rs-fill');
+const thumbMin   = document.getElementById('thumb-min');
+const thumbMax   = document.getElementById('thumb-max');
+const rsLabelMin = document.getElementById('rs-label-min');
+const rsLabelMax = document.getElementById('rs-label-max');
+const RS_GAP = 0.05;
 
 function rsToPct(v) {
   return (v - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN) * 100;
@@ -779,12 +988,9 @@ function updateRangeSliderUI() {
   rsLabelMax.textContent = rViewMax.toFixed(2);
 }
 
-let rsDragging = null; // 'min' | 'max' | null
+let rsDragging = null;
 
-function rsMouseDown(which, e) {
-  rsDragging = which;
-  e.preventDefault();
-}
+function rsMouseDown(which, e) { rsDragging = which; e.preventDefault(); }
 thumbMin.addEventListener('mousedown',  e => rsMouseDown('min', e));
 thumbMax.addEventListener('mousedown',  e => rsMouseDown('max', e));
 thumbMin.addEventListener('touchstart', e => { rsMouseDown('min', e); }, { passive: false });
@@ -825,19 +1031,15 @@ function buildButtons() {
   for (const step of STEPS) {
     const row = document.createElement('div');
     row.className = 'btn-row';
-
     const decBtn = document.createElement('button');
     decBtn.textContent = `− ${step}`;
     decBtn.addEventListener('click', () => setR(currentR - step));
-
     const label = document.createElement('span');
     label.className = 'step-label';
     label.textContent = `± ${step}`;
-
     const incBtn = document.createElement('button');
     incBtn.textContent = `+ ${step}`;
     incBtn.addEventListener('click', () => setR(currentR + step));
-
     row.appendChild(decBtn);
     row.appendChild(label);
     row.appendChild(incBtn);
@@ -850,25 +1052,31 @@ buildButtons();
 const _params   = new URLSearchParams(location.search);
 const _initRMin = parseFloat(_params.get('rMin'));
 const _initRMax = parseFloat(_params.get('rMax'));
+const _initXMin = parseFloat(_params.get('xMin'));
+const _initXMax = parseFloat(_params.get('xMax'));
 const _initR    = parseFloat(_params.get('r'));
 const _initX0   = parseFloat(_params.get('x0'));
 
 rViewMin = (isFinite(_initRMin) && _initRMin >= SLIDER_MIN) ? _initRMin : 2.5;
 rViewMax = (isFinite(_initRMax) && _initRMax <= SLIDER_MAX && _initRMax > rViewMin) ? _initRMax : 4.0;
-bif.xMin = rViewMin;
-bif.xMax = rViewMax;
+bifYMin  = (isFinite(_initXMin) && _initXMin >= 0) ? _initXMin : 0.0;
+bifYMax  = (isFinite(_initXMax) && _initXMax <= 1 && _initXMax > bifYMin) ? _initXMax : 1.0;
+bif.xMin = rViewMin; bif.xMax = rViewMax;
+bif.yMin = bifYMin;  bif.yMax = bifYMax;
 
+if (_params.has('log'))     logScale      = _params.get('log')     !== '0';
 if (_params.has('discard')) discardWarmup = _params.get('discard') !== '0';
 if (_params.has('random'))  randomX0      = _params.get('random')  !== '0';
 if (isFinite(_initX0) && _initX0 >= 0 && _initX0 <= 1) x0 = _initX0;
 
 chkDiscard.checked = discardWarmup;
 chkRandom.checked  = randomX0;
+chkLog.checked     = logScale;
 
-buildBifurcation(); // also calls buildBifBg()
+buildBifHeatmap();
 updateRangeSliderUI();
 document.getElementById('range-info').textContent =
-  `range: ${rViewMin.toFixed(2)} – ${rViewMax.toFixed(2)}`;
+  `r: ${rViewMin.toFixed(2)} – ${rViewMax.toFixed(2)}`;
 setR(isFinite(_initR) ? _initR : 3.5);
 </script>
 </body>
