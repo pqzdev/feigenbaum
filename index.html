@@ -262,6 +262,7 @@
       <label class="opt-row">
         <input type="checkbox" id="chk-log"> log₁₀ scale
       </label>
+      <span id="bif-computing" style="display:none;color:#484f58;font-size:0.68rem;margin-left:6px;">computing…</span>
       <button id="btn-reset-zoom">Reset zoom</button>
     </div>
     <div id="range-slider">
@@ -293,7 +294,7 @@
 const DATA_MIN = 0, DATA_MAX = 4.0;
 const SLIDER_MIN = 0, SLIDER_MAX = 4.0;
 const WARM_UP = 5000;
-const HEATMAP_ITER = 2000; // post-warmup iterations per column
+const HEATMAP_ITER = 200000; // post-warmup iterations per column (run in worker)
 
 // ─── Viridis LUT (256 entries) ────────────────────────────────────────────────
 // Standard viridis colormap RGB values
@@ -454,89 +455,119 @@ function drawAxes(ctx, region, xLabel, yLabel, xTicks, yTicks, w, h) {
 // ─── Logistic map ─────────────────────────────────────────────────────────────
 function logistic(r, x) { return r * x * (1 - x); }
 
-// ─── Bifurcation heatmap ──────────────────────────────────────────────────────
+// ─── Bifurcation heatmap (Web Worker) ────────────────────────────────────────
 let bifBgImage = null;
+let _bifWorker = null;
+let _bifGeneration = 0; // incremented on each new request; worker result checked against it
 
-function buildBifHeatmap() {
-  const W = Math.round(bif.x1 - bif.x0);
-  const H = Math.round(bif.y1 - bif.y0);
-  const rMin = bif.xMin, rMax = bif.xMax;
-  const xMin = bif.yMin, xMax = bif.yMax;
-
-  // Accumulate density: density[col * H + row]
+// Worker source (inlined as blob so the app stays single-file)
+const WORKER_SRC = `
+self.onmessage = function(e) {
+  const { W, H, rMin, rMax, xMin, xMax, warmUp, heatmapIter, generation } = e.data;
   const density = new Float32Array(W * H);
-
   for (let col = 0; col < W; col++) {
     const r = rMin + (col + 0.5) / W * (rMax - rMin);
     let x = 0.5;
-    for (let j = 0; j < WARM_UP; j++) x = logistic(r, x);
-    for (let j = 0; j < HEATMAP_ITER; j++) {
-      x = logistic(r, x);
+    for (let j = 0; j < warmUp; j++) x = r * x * (1 - x);
+    for (let j = 0; j < heatmapIter; j++) {
+      x = r * x * (1 - x);
       if (x >= xMin && x <= xMax) {
         const row = Math.floor((xMax - x) / (xMax - xMin) * H);
         if (row >= 0 && row < H) density[col * H + row]++;
       }
     }
   }
+  self.postMessage({ density: density.buffer, W, H, generation }, [density.buffer]);
+};
+`;
 
-  // Find max for normalisation
+function getWorker() {
+  if (!_bifWorker) {
+    const blob = new Blob([WORKER_SRC], { type: 'application/javascript' });
+    _bifWorker = new Worker(URL.createObjectURL(blob));
+    _bifWorker.onmessage = onWorkerResult;
+  }
+  return _bifWorker;
+}
+
+function onWorkerResult(e) {
+  const { density: buf, W, H, generation } = e.data;
+  if (generation !== _bifGeneration) return; // stale result, discard
+
+  const density = new Float32Array(buf);
+  renderDensityToImage(density, W, H);
+  setR(currentR); // redraw bif canvas with new background
+  setBifComputing(false);
+}
+
+function renderDensityToImage(density, W, H) {
   let maxCount = 1;
   for (let i = 0; i < density.length; i++) {
     if (density[i] > maxCount) maxCount = density[i];
   }
   const logMax = Math.log10(1 + maxCount);
 
-  // Build ImageData for the plot area only
   const off = document.createElement('canvas');
   off.width  = BIF_W;
   off.height = BIF_H;
   const ctx = off.getContext('2d');
 
-  // Background
   ctx.fillStyle = '#161b22';
   ctx.fillRect(0, 0, BIF_W, BIF_H);
 
-  // Write pixel data for plot area
   const imgData = ctx.getImageData(bif.x0, bif.y0, W, H);
   const px = imgData.data;
-  const bg = [22, 27, 34]; // #161b22
+  const bg = [22, 27, 34];
 
   for (let col = 0; col < W; col++) {
     for (let row = 0; row < H; row++) {
       const count = density[col * H + row];
       const idx = (row * W + col) * 4;
       if (count === 0) {
-        px[idx]   = bg[0];
-        px[idx+1] = bg[1];
-        px[idx+2] = bg[2];
-        px[idx+3] = 255;
+        px[idx] = bg[0]; px[idx+1] = bg[1]; px[idx+2] = bg[2]; px[idx+3] = 255;
       } else {
         const v = logScale
           ? Math.log10(1 + count) / logMax
           : count / maxCount;
         const vi = Math.min(255, Math.floor(v * 255)) * 3;
-        px[idx]   = VIRIDIS[vi];
-        px[idx+1] = VIRIDIS[vi+1];
-        px[idx+2] = VIRIDIS[vi+2];
-        px[idx+3] = 255;
+        px[idx] = VIRIDIS[vi]; px[idx+1] = VIRIDIS[vi+1]; px[idx+2] = VIRIDIS[vi+2]; px[idx+3] = 255;
       }
     }
   }
   ctx.putImageData(imgData, bif.x0, bif.y0);
 
-  // Title
   ctx.fillStyle = '#8b949e';
   ctx.font = '13px Courier New';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('Bifurcation Diagram', (bif.x0 + bif.x1) / 2, 6);
 
-  // Dynamic axes
   const xTicks = dynamicTicks(bif.xMin, bif.xMax, 5);
   const yTicks = dynamicTicks(bif.yMin, bif.yMax, 5);
   drawAxes(ctx, bif, 'r', 'x', xTicks, yTicks, BIF_W, BIF_H);
 
   bifBgImage = off;
+}
+
+function setBifComputing(on) {
+  document.getElementById('btn-reset-zoom').style.opacity = on ? '0.4' : '';
+  const hint = document.getElementById('bif-computing');
+  if (hint) hint.style.display = on ? 'inline' : 'none';
+}
+
+function buildBifHeatmap() {
+  const W = Math.round(bif.x1 - bif.x0);
+  const H = Math.round(bif.y1 - bif.y0);
+  _bifGeneration++;
+  setBifComputing(true);
+  getWorker().postMessage({
+    W, H,
+    rMin: bif.xMin, rMax: bif.xMax,
+    xMin: bif.yMin, xMax: bif.yMax,
+    warmUp: WARM_UP,
+    heatmapIter: HEATMAP_ITER,
+    generation: _bifGeneration,
+  });
 }
 
 function drawBifurcation(currentR, orbit) {
@@ -907,7 +938,7 @@ function setR(r) {
 let _bifTimer = null;
 function scheduleBifHeatmap() {
   clearTimeout(_bifTimer);
-  _bifTimer = setTimeout(() => { buildBifHeatmap(); setR(currentR); }, 80);
+  _bifTimer = setTimeout(() => { buildBifHeatmap(); }, 80);
 }
 
 function setZoom(r0, r1, x0z, x1z) {
@@ -947,7 +978,6 @@ chkRandom.addEventListener('change', () => {
 chkLog.addEventListener('change', () => {
   logScale = chkLog.checked;
   buildBifHeatmap();
-  setR(currentR);
 });
 document.getElementById('btn-reset-zoom').addEventListener('click', () => {
   setZoom(DATA_MIN, DATA_MAX, 0, 1);
