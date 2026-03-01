@@ -571,6 +571,12 @@ function setBifComputing(on) {
 function buildBifHeatmap() {
   const W = Math.round(bif.x1 - bif.x0);
   const H = Math.round(bif.y1 - bif.y0);
+
+  // Scale iterations with zoom depth: every 10× zoom on r-axis adds 20k more
+  const rSpan = bif.xMax - bif.xMin;
+  const zoomDepth = Math.max(0, Math.log10((DATA_MAX - DATA_MIN) / rSpan));
+  const heatmapIter = Math.min(2000000, HEATMAP_ITER + Math.round(zoomDepth * 20000));
+
   _bifGeneration++;
   setBifComputing(true);
   getWorker().postMessage({
@@ -578,7 +584,7 @@ function buildBifHeatmap() {
     rMin: bif.xMin, rMax: bif.xMax,
     xMin: bif.yMin, xMax: bif.yMax,
     warmUp: WARM_UP,
-    heatmapIter: HEATMAP_ITER,
+    heatmapIter,
     generation: _bifGeneration,
   });
 }
